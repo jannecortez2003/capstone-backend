@@ -162,11 +162,30 @@ app.post('/admin_update_booking_status', (req, res) => {
   });
 });
 
-// --- NEW: INVENTORY ROUTES ---
+// ==========================================
+// 4. INVENTORY ROUTES
+// ==========================================
+
 app.get('/admin_fetch_inventory', (req, res) => {
   db.query("SELECT * FROM inventory", (err, results) => {
     if (err) return res.status(500).json({ success: false, message: "Database error" });
     res.json({ success: true, inventory: results });
+  });
+});
+
+app.post('/admin_add_inventory', (req, res) => {
+  const { name, quantity, unit } = req.body;
+  db.query("INSERT INTO inventory (name, quantity, unit) VALUES (?, ?, ?)", [name, quantity, unit], (err) => {
+    if (err) return res.status(500).json({ success: false, message: "Database error" });
+    res.json({ success: true, message: "Item added" });
+  });
+});
+
+app.post('/admin_update_inventory', (req, res) => {
+  const { id, name, quantity, unit } = req.body;
+  db.query("UPDATE inventory SET name=?, quantity=?, unit=? WHERE id=?", [name, quantity, unit, id], (err) => {
+    if (err) return res.status(500).json({ success: false, message: "Database error" });
+    res.json({ success: true, message: "Item updated" });
   });
 });
 
@@ -178,11 +197,30 @@ app.post('/admin_delete_inventory', (req, res) => {
   });
 });
 
-// --- NEW: MENU ROUTES ---
+// ==========================================
+// 5. MENU ROUTES
+// ==========================================
+
 app.get('/admin_fetch_menu', (req, res) => {
   db.query("SELECT * FROM menu_items", (err, results) => {
     if (err) return res.status(500).json({ success: false, message: "Database error" });
     res.json({ success: true, menu: results });
+  });
+});
+
+app.post('/admin_add_menu', (req, res) => {
+  const { name, category, price, description } = req.body;
+  db.query("INSERT INTO menu_items (name, category, price, description) VALUES (?, ?, ?, ?)", [name, category, price, description], (err) => {
+    if (err) return res.status(500).json({ success: false, message: "Database error" });
+    res.json({ success: true, message: "Menu item added" });
+  });
+});
+
+app.post('/admin_update_menu', (req, res) => {
+  const { id, name, category, price, description } = req.body;
+  db.query("UPDATE menu_items SET name=?, category=?, price=?, description=? WHERE id=?", [name, category, price, description, id], (err) => {
+    if (err) return res.status(500).json({ success: false, message: "Database error" });
+    res.json({ success: true, message: "Menu item updated" });
   });
 });
 
