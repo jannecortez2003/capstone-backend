@@ -2,7 +2,7 @@ require('dotenv').config();
 const express = require('express');
 const mysql = require('mysql2');
 const cors = require('cors');
-const bcrypt = require('bcryptjs'); // Added for secure password hashing
+const bcrypt = require('bcryptjs'); 
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -32,7 +32,6 @@ app.get('/', (req, res) => {
   res.send('Node.js Backend is running perfectly!');
 });
 
-
 // ==========================================
 // 1. AUTHENTICATION ROUTES (Login & Register)
 // ==========================================
@@ -41,15 +40,12 @@ app.post('/register', async (req, res) => {
   const { name, email, password } = req.body;
   if (!name || !email || !password) return res.status(400).json({ success: false, message: "Missing required fields" });
 
-  // Check if email exists
   db.query("SELECT id FROM users WHERE email = ?", [email], async (err, results) => {
     if (err) return res.status(500).json({ success: false, message: "Database error" });
     if (results.length > 0) return res.status(400).json({ success: false, message: "Email already registered" });
 
-    // Hash the password securely
     const hashedPassword = await bcrypt.hash(password, 10);
 
-    // Insert new user
     db.query("INSERT INTO users (username, email, password, is_verified) VALUES (?, ?, ?, 0)", [name, email, hashedPassword], (err, result) => {
       if (err) return res.status(500).json({ success: false, message: "Registration failed" });
       res.json({
@@ -62,7 +58,7 @@ app.post('/register', async (req, res) => {
 });
 
 app.post('/login', (req, res) => {
-  const { email, password } = req.body; // email field actually contains Email OR Username
+  const { email, password } = req.body; 
   if (!email || !password) return res.status(400).json({ success: false, message: "Missing credentials" });
 
   db.query("SELECT * FROM users WHERE email = ? OR username = ? LIMIT 1", [email, email], async (err, results) => {
@@ -70,8 +66,6 @@ app.post('/login', (req, res) => {
     if (results.length === 0) return res.status(400).json({ success: false, message: "No user found with that email or name" });
 
     const user = results[0];
-    
-    // Compare provided password with hashed database password
     const isMatch = await bcrypt.compare(password, user.password);
     if (isMatch) {
       res.json({
@@ -85,6 +79,34 @@ app.post('/login', (req, res) => {
   });
 });
 
+// --- ADMIN LOGIN ROUTE ---
+app.post('/adminlogin', (req, res) => {
+  const { username, password } = req.body;
+  if (!username || !password) {
+    return res.status(400).json({ success: false, message: "Missing fields" });
+  }
+
+  db.query("SELECT * FROM admins WHERE username = ?", [username], (err, results) => {
+    if (err) return res.status(500).json({ success: false, message: "Database error" });
+    if (results.length === 0) return res.status(400).json({ success: false, message: "Admin not found" });
+
+    const admin = results[0];
+
+    if (password === admin.password) {
+      res.json({
+        success: true,
+        message: "Login successful",
+        admin: {
+          id: admin.id,
+          username: admin.username,
+          role: 'admin'
+        }
+      });
+    } else {
+      res.status(400).json({ success: false, message: "Invalid password" });
+    }
+  });
+});
 
 // ==========================================
 // 2. CLIENT BOOKING ROUTES
@@ -93,15 +115,13 @@ app.post('/login', (req, res) => {
 app.get('/fetch_booked_dates', (req, res) => {
   db.query("SELECT preferred_date FROM appointments WHERE status != 'Cancelled'", (err, results) => {
     if (err) return res.status(500).json({ success: false, message: "Database error" });
-    
-    // Format dates into a simple array just like PHP did
     const bookedDates = results.map(row => row.preferred_date);
     res.json({ success: true, bookedDates });
   });
 });
 
 app.get('/fetch_user_appointments', (req, res) => {
-  const userId = req.query.user_id; // Get ID from URL parameters
+  const userId = req.query.user_id; 
   if (!userId) return res.status(400).json({ success: false, message: "User ID is required." });
 
   const sql = "SELECT id, event_type, package_type, preferred_date, guest_count, status, total_cost FROM appointments WHERE user_id = ? ORDER BY created_at DESC";
@@ -117,7 +137,6 @@ app.post('/book_event', (req, res) => {
     return res.status(400).json({ success: false, message: "All fields are required." });
   }
 
-  // Inventory Logic
   const inventoryNeedsPerGuest = { 'Chairs': 1, 'Plate': 1, 'Utensils - Spoon': 1, 'Utensils - Fork': 1 };
   const inventoryNeedsRatio = { 'Table (10 seater)': 10 };
   let requiredInventory = [];
@@ -140,13 +159,11 @@ app.post('/book_event', (req, res) => {
   });
 });
 
-
 // ==========================================
 // 3. ADMIN ROUTES
 // ==========================================
 
 app.get('/admin_fetch_dashboard_stats', async (req, res) => {
-  // Using promise wrapper to run multiple queries cleanly
   try {
     const promiseDb = db.promise();
     const [[bookingsRow]] = await promiseDb.query("SELECT COUNT(*) as count FROM appointments");
@@ -200,14 +217,12 @@ app.post('/admin_update_booking_status', (req, res) => {
   const { bookingId, status } = req.body;
   if (!bookingId || !status) return res.status(400).json({ success: false, message: "Missing data" });
 
-  // Update logic matching your PHP
   let sql = "UPDATE appointments SET status = ? WHERE id = ?";
   if (status === 'Confirmed') {
     sql = "UPDATE appointments SET status = ?, total_cost = COALESCE(total_cost, 30000.00) WHERE id = ?";
   }
 
   db.query("ALTER TABLE appointments MODIFY COLUMN status ENUM('Pending', 'Confirmed', 'Cancelled', 'Completed') NOT NULL DEFAULT 'Pending'", (err) => {
-    // We run the alter table just in case, then run the update
     db.query(sql, [status, bookingId], (err, result) => {
       if (err) return res.status(500).json({ success: false, message: "Error updating status" });
       res.json({ success: true, message: `Booking #${bookingId} status successfully updated to ${status}.` });
