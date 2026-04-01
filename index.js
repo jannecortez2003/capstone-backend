@@ -106,6 +106,57 @@ app.get('/fetch_user_appointments', (req, res) => {
   });
 });
 
+app.get('/fetch_user_transactions', async (req, res) => {
+  const userId = req.query.user_id;
+  if (!userId) return res.status(400).json({ success: false, message: "User ID required" });
+
+  try {
+    const promiseDb = db.promise();
+
+    // 1. Fetch Payments (Linking payments to the user's appointments)
+    const [transactions] = await promiseDb.query(`
+      SELECT p.id, p.amount_paid, p.payment_date, p.payment_method, a.status, a.event_type, a.preferred_date 
+      FROM payments p
+      JOIN appointments a ON p.appointment_id = a.id
+      WHERE a.user_id = ?
+      ORDER BY p.payment_date DESC
+    `, [userId]);
+
+    let total_spent = 0;
+    transactions.forEach(t => {
+        total_spent += parseFloat(t.amount_paid || 0);
+    });
+
+    // 2. Fetch Booking Stats
+    const [statsResult] = await promiseDb.query(`
+      SELECT 
+        COUNT(*) as total_bookings,
+        SUM(CASE WHEN status = 'Pending' THEN 1 ELSE 0 END) as pending,
+        SUM(CASE WHEN status = 'Confirmed' THEN 1 ELSE 0 END) as confirmed,
+        SUM(CASE WHEN status = 'Completed' THEN 1 ELSE 0 END) as completed
+      FROM appointments WHERE user_id = ?
+    `, [userId]);
+
+    const stats = statsResult[0] || {};
+
+    return res.json({
+      success: true,
+      transactions: transactions,
+      stats: {
+        total_bookings: stats.total_bookings || 0,
+        pending: stats.pending || 0,
+        confirmed: stats.confirmed || 0,
+        completed: stats.completed || 0,
+        total_spent: total_spent
+      }
+    });
+
+  } catch (error) {
+    console.error("Transaction Fetch Error:", error);
+    return res.status(500).json({ success: false, message: "Database error" });
+  }
+});
+
 app.post('/book_event', (req, res) => {
   const { userId, eventType, packageType, preferredDate, guestCount, selectedDishes, notes } = req.body;
   db.query(`INSERT INTO appointments (user_id, event_type, package_type, preferred_date, guest_count, selected_dishes, required_inventory, notes, status) VALUES (?, ?, ?, ?, ?, ?, '', ?, 'Pending')`, 
