@@ -166,13 +166,22 @@ app.post('/book_event', (req, res) => {
   });
 });
 
+// User Uploads ID Verification
 app.post('/verify', upload.single('idImage'), (req, res) => {
   const { userId, idType, idNumber, lastName, firstName, address } = req.body;
   const imagePath = req.file ? req.file.path : '';
+  
   db.query("INSERT INTO user_verifications (user_id, id_type, id_number, first_name, last_name, address, id_image_path, status) VALUES (?, ?, ?, ?, ?, ?, ?, 'Pending')", 
   [userId, idType, idNumber, firstName, lastName, address, imagePath], (err) => {
-    if (err) return res.status(500).json({ success: false, message: "Database error" });
-    return res.json({ success: true, message: "Verification submitted. Please wait for admin approval." });
+    
+    // ADD 'return' HERE to stop the code if there is an error
+    if (err) {
+      console.error("Database error during verification:", err);
+      return res.status(500).json({ success: false, message: "Database error" });
+    }
+    
+    // This only runs if the error block above was skipped
+    res.json({ success: true, message: "Verification submitted. Please wait for admin approval." });
   });
 });
 
