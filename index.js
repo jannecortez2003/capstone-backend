@@ -168,20 +168,46 @@ app.post('/book_event', (req, res) => {
 
 // User Uploads ID Verification
 app.post('/verify', upload.single('idImage'), (req, res) => {
-  const { userId, idType, idNumber, lastName, firstName, address } = req.body;
+  // Added phone and email here
+  const { userId, idType, idNumber, lastName, firstName, address, phone, email } = req.body;
   const imagePath = req.file ? req.file.path : '';
   
-  db.query("INSERT INTO user_verifications (user_id, id_type, id_number, first_name, last_name, address, id_image_path, status) VALUES (?, ?, ?, ?, ?, ?, ?, 'Pending')", 
-  [userId, idType, idNumber, firstName, lastName, address, imagePath], (err) => {
+  // FIXED: Changed table to 'verification_requests' and added phone/email columns
+  db.query("INSERT INTO verification_requests (user_id, id_type, id_number, first_name, last_name, address, phone, email, id_image_path, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'Pending')", 
+  [userId, idType, idNumber, firstName, lastName, address, phone, email, imagePath], (err) => {
     
-    // CRITICAL: You must 'return' to stop execution if an error occurs
     if (err) {
       console.error("Database error during verification:", err);
       return res.status(500).json({ success: false, message: "Database error" });
     }
     
-    // This will now only run if the database insert was successful
     return res.json({ success: true, message: "Verification submitted. Please wait for admin approval." });
+  });
+});
+
+// Admin Fetches Verifications
+app.get('/admin_fetch_verification', (req, res) => {
+  // FIXED: Changed table to 'verification_requests'
+  db.query("SELECT * FROM verification_requests WHERE status = 'Pending'", (err, r) => {
+    if (err) return res.status(500).json({ success: false, message: "Database error" });
+    return res.json({ success: true, requests: r });
+  });
+});
+
+// Admin Approves/Rejects Verifications
+app.post('/admin_verify_user', (req, res) => {
+  const { requestId, status } = req.body;
+  // FIXED: Changed table to 'verification_requests'
+  db.query("UPDATE verification_requests SET status = ? WHERE id = ?", [status, requestId], (err) => {
+    if (err) return res.status(500).json({ success: false, message: "Database error" });
+    
+    if (status === 'Verified') {
+        // FIXED: Changed table to 'verification_requests'
+        db.query("UPDATE users SET is_verified = 1 WHERE id = (SELECT user_id FROM verification_requests WHERE id = ?)", [requestId], (updateErr) => {
+            if (updateErr) console.error("Failed to verify user account:", updateErr);
+        });
+    }
+    return res.json({ success: true });
   });
 });
 
