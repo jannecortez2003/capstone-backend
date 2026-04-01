@@ -174,14 +174,14 @@ app.post('/verify', upload.single('idImage'), (req, res) => {
   db.query("INSERT INTO user_verifications (user_id, id_type, id_number, first_name, last_name, address, id_image_path, status) VALUES (?, ?, ?, ?, ?, ?, ?, 'Pending')", 
   [userId, idType, idNumber, firstName, lastName, address, imagePath], (err) => {
     
-    // ADD 'return' HERE to stop the code if there is an error
+    // CRITICAL: Add 'return' here to prevent the 500 error crash
     if (err) {
       console.error("Database error during verification:", err);
       return res.status(500).json({ success: false, message: "Database error" });
     }
     
-    // This only runs if the error block above was skipped
-    res.json({ success: true, message: "Verification submitted. Please wait for admin approval." });
+    // This will now only run if there was no error
+    return res.json({ success: true, message: "Verification submitted. Please wait for admin approval." });
   });
 });
 
