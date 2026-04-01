@@ -199,7 +199,11 @@ app.post('/admin_verify_user', (req, res) => {
   const { requestId, status } = req.body;
   // FIXED: Changed table to 'verification_requests'
   db.query("UPDATE verification_requests SET status = ? WHERE id = ?", [status, requestId], (err) => {
-    if (err) return res.status(500).json({ success: false, message: "Database error" });
+    if (err) {
+      console.error("Database error during verification:", err);
+      // Temporarily send the EXACT SQL error to the frontend so we can read it!
+      return res.status(500).json({ success: false, message: "SQL Error: " + err.message });
+    }
     
     if (status === 'Verified') {
         // FIXED: Changed table to 'verification_requests'
