@@ -246,9 +246,21 @@ app.get('/admin_fetch_payment_history', (req, res) => {
   });
 });
 app.post('/admin_process_payment', (req, res) => {
-  db.query("INSERT INTO payments (appointment_id, amount_paid, payment_type, remarks) VALUES (?, ?, ?, ?)", [req.body.appointmentId, req.body.amount, req.body.paymentType, req.body.remarks], (err) => {
-    if (err) return res.status(500).json({ success: false, message: "Database error" });
-    return res.json({ success: true });
+  const appointmentId = req.body.appointmentId;
+  const amount = req.body.amount;
+  // This automatically grabs the payment method sent from your frontend
+  const paymentMethod = req.body.paymentMethod || req.body.paymentType || 'Cash'; 
+
+  // Safely inserts into the correct 'payment_method' column and removes the 'remarks' column
+  db.query(
+    "INSERT INTO payments (appointment_id, amount_paid, payment_method) VALUES (?, ?, ?)", 
+    [appointmentId, amount, paymentMethod], 
+    (err) => {
+      if (err) {
+        console.error("Payment Insert Error:", err); // Helps us see the exact error if it fails again
+        return res.status(500).json({ success: false, message: "Database error" });
+      }
+      return res.json({ success: true });
   });
 });
 
