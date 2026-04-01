@@ -27,13 +27,12 @@ db.connect((err) => {
   console.log('Successfully connected to the Railway MySQL database!');
 });
 
-// --- Test Route ---
 app.get('/', (req, res) => {
   res.send('Node.js Backend is running perfectly!');
 });
 
 // ==========================================
-// 1. AUTHENTICATION ROUTES (Login & Register)
+// 1. AUTHENTICATION ROUTES
 // ==========================================
 
 app.post('/register', async (req, res) => {
@@ -48,11 +47,7 @@ app.post('/register', async (req, res) => {
 
     db.query("INSERT INTO users (username, email, password, is_verified) VALUES (?, ?, ?, 0)", [name, email, hashedPassword], (err, result) => {
       if (err) return res.status(500).json({ success: false, message: "Registration failed" });
-      res.json({
-        success: true,
-        message: "User registered successfully",
-        user: { id: result.insertId, fullName: name, email: email, verified: false }
-      });
+      res.json({ success: true, message: "User registered successfully", user: { id: result.insertId, fullName: name, email: email, verified: false } });
     });
   });
 });
@@ -66,42 +61,34 @@ app.post('/login', (req, res) => {
     if (results.length === 0) return res.status(400).json({ success: false, message: "No user found with that email or name" });
 
     const user = results[0];
-    const isMatch = await bcrypt.compare(password, user.password);
+    
+    // FIX: Fallback for old plain-text passwords
+    let isMatch = false;
+    if (user.password && user.password.startsWith('$2')) {
+        isMatch = await bcrypt.compare(password, user.password); // New secure passwords
+    } else {
+        isMatch = (password === user.password); // Old plain text passwords
+    }
+
     if (isMatch) {
-      res.json({
-        success: true,
-        message: "Login successful",
-        user: { id: user.id, fullName: user.username, email: user.email, verified: Boolean(user.is_verified) }
-      });
+      res.json({ success: true, message: "Login successful", user: { id: user.id, fullName: user.username, email: user.email, verified: Boolean(user.is_verified) } });
     } else {
       res.status(400).json({ success: false, message: "Invalid password" });
     }
   });
 });
 
-// --- ADMIN LOGIN ROUTE ---
 app.post('/adminlogin', (req, res) => {
   const { username, password } = req.body;
-  if (!username || !password) {
-    return res.status(400).json({ success: false, message: "Missing fields" });
-  }
+  if (!username || !password) return res.status(400).json({ success: false, message: "Missing fields" });
 
   db.query("SELECT * FROM admins WHERE username = ?", [username], (err, results) => {
     if (err) return res.status(500).json({ success: false, message: "Database error" });
     if (results.length === 0) return res.status(400).json({ success: false, message: "Admin not found" });
 
     const admin = results[0];
-
     if (password === admin.password) {
-      res.json({
-        success: true,
-        message: "Login successful",
-        admin: {
-          id: admin.id,
-          username: admin.username,
-          role: 'admin'
-        }
-      });
+      res.json({ success: true, message: "Login successful", admin: { id: admin.id, username: admin.username, role: 'admin' } });
     } else {
       res.status(400).json({ success: false, message: "Invalid password" });
     }
@@ -115,17 +102,14 @@ app.post('/adminlogin', (req, res) => {
 app.get('/fetch_booked_dates', (req, res) => {
   db.query("SELECT preferred_date FROM appointments WHERE status != 'Cancelled'", (err, results) => {
     if (err) return res.status(500).json({ success: false, message: "Database error" });
-    const bookedDates = results.map(row => row.preferred_date);
-    res.json({ success: true, bookedDates });
+    res.json({ success: true, bookedDates: results.map(row => row.preferred_date) });
   });
 });
 
 app.get('/fetch_user_appointments', (req, res) => {
   const userId = req.query.user_id; 
   if (!userId) return res.status(400).json({ success: false, message: "User ID is required." });
-
-  const sql = "SELECT id, event_type, package_type, preferred_date, guest_count, status, total_cost FROM appointments WHERE user_id = ? ORDER BY created_at DESC";
-  db.query(sql, [userId], (err, results) => {
+  db.query("SELECT id, event_type, package_type, preferred_date, guest_count, status, total_cost FROM appointments WHERE user_id = ? ORDER BY created_at DESC", [userId], (err, results) => {
     if (err) return res.status(500).json({ success: false, message: "Error fetching appointments" });
     res.json({ success: true, appointments: results });
   });
@@ -133,29 +117,12 @@ app.get('/fetch_user_appointments', (req, res) => {
 
 app.post('/book_event', (req, res) => {
   const { userId, eventType, packageType, preferredDate, guestCount, selectedDishes, notes } = req.body;
-  if (!userId || !eventType || !packageType || !preferredDate || !guestCount || !selectedDishes) {
-    return res.status(400).json({ success: false, message: "All fields are required." });
-  }
+  if (!userId || !eventType || !packageType || !preferredDate || !guestCount || !selectedDishes) return res.status(400).json({ success: false, message: "All fields are required." });
 
-  const inventoryNeedsPerGuest = { 'Chairs': 1, 'Plate': 1, 'Utensils - Spoon': 1, 'Utensils - Fork': 1 };
-  const inventoryNeedsRatio = { 'Table (10 seater)': 10 };
-  let requiredInventory = [];
-
-  for (const [item, itemsPerGuest] of Object.entries(inventoryNeedsPerGuest)) {
-    const quantity = itemsPerGuest * guestCount;
-    if (quantity > 0) requiredInventory.push(`${item}: ${quantity}`);
-  }
-  for (const [item, ratio] of Object.entries(inventoryNeedsRatio)) {
-    const quantity = Math.ceil(guestCount / ratio);
-    if (quantity > 0) requiredInventory.push(`${item}: ${quantity}`);
-  }
-  requiredInventory.push('Lights (assorted): 1');
-  const requiredInventoryStr = requiredInventory.join('; ');
-
-  const sql = `INSERT INTO appointments (user_id, event_type, package_type, preferred_date, guest_count, selected_dishes, required_inventory, notes, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Pending')`;
-  db.query(sql, [userId, eventType, packageType, preferredDate, guestCount, selectedDishes, requiredInventoryStr, notes || ''], (err, result) => {
-    if (err) return res.status(500).json({ success: false, message: "Database error: " + err.message });
-    res.json({ success: true, message: "Event booking successful. We will contact you shortly!", booking_id: result.insertId });
+  const sql = `INSERT INTO appointments (user_id, event_type, package_type, preferred_date, guest_count, selected_dishes, required_inventory, notes, status) VALUES (?, ?, ?, ?, ?, ?, '', ?, 'Pending')`;
+  db.query(sql, [userId, eventType, packageType, preferredDate, guestCount, selectedDishes, notes || ''], (err, result) => {
+    if (err) return res.status(500).json({ success: false, message: "Database error" });
+    res.json({ success: true, message: "Event booking successful!", booking_id: result.insertId });
   });
 });
 
@@ -174,63 +141,57 @@ app.get('/admin_fetch_dashboard_stats', async (req, res) => {
 
     res.json({
       success: true,
-      stats: {
-        bookings: bookingsRow?.count || 0,
-        revenue: revenueRow?.total || 0,
-        menuItems: menuRow?.count || 0,
-        customers: userRow?.count || 0
-      },
+      stats: { bookings: bookingsRow?.count || 0, revenue: revenueRow?.total || 0, menuItems: menuRow?.count || 0, customers: userRow?.count || 0 },
       upcomingEvents: events
     });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ success: false, message: "Database error fetching stats" });
-  }
+  } catch (err) { res.status(500).json({ success: false, message: "Database error" }); }
 });
 
 app.get('/admin_fetch_bookings', (req, res) => {
-  const sql = `
-    SELECT a.*, u.username as customer_name, u.email as customer_email,
-    COALESCE(SUM(p.amount_paid), 0) as amount_paid,
-    (a.total_cost - COALESCE(SUM(p.amount_paid), 0)) as balance
-    FROM appointments a
-    LEFT JOIN users u ON a.user_id = u.id 
-    LEFT JOIN payments p ON a.id = p.appointment_id
-    GROUP BY a.id ORDER BY a.created_at DESC
-  `;
-  db.query(sql, (err, results) => {
+  db.query("SELECT a.*, u.username as customer_name, u.email as customer_email FROM appointments a LEFT JOIN users u ON a.user_id = u.id ORDER BY a.created_at DESC", (err, results) => {
     if (err) return res.status(500).json({ success: false, message: "Database error" });
-    
-    const formattedBookings = results.map(row => ({
-      ...row,
-      customer_name: row.customer_name || `Unknown User`,
-      customer_email: row.customer_email || "N/A",
-      total_cost: parseFloat(row.total_cost) || 0,
-      amount_paid: parseFloat(row.amount_paid) || 0,
-      balance: parseFloat(row.balance) || 0
-    }));
-    res.json({ success: true, bookings: formattedBookings });
+    res.json({ success: true, bookings: results });
   });
 });
 
 app.post('/admin_update_booking_status', (req, res) => {
   const { bookingId, status } = req.body;
-  if (!bookingId || !status) return res.status(400).json({ success: false, message: "Missing data" });
-
-  let sql = "UPDATE appointments SET status = ? WHERE id = ?";
-  if (status === 'Confirmed') {
-    sql = "UPDATE appointments SET status = ?, total_cost = COALESCE(total_cost, 30000.00) WHERE id = ?";
-  }
-
-  db.query("ALTER TABLE appointments MODIFY COLUMN status ENUM('Pending', 'Confirmed', 'Cancelled', 'Completed') NOT NULL DEFAULT 'Pending'", (err) => {
-    db.query(sql, [status, bookingId], (err, result) => {
-      if (err) return res.status(500).json({ success: false, message: "Error updating status" });
-      res.json({ success: true, message: `Booking #${bookingId} status successfully updated to ${status}.` });
-    });
+  db.query("UPDATE appointments SET status = ? WHERE id = ?", [status, bookingId], (err, result) => {
+    if (err) return res.status(500).json({ success: false, message: "Error updating status" });
+    res.json({ success: true, message: "Status updated" });
   });
 });
 
-// --- Start Server ---
-app.listen(PORT, () => {
-  console.log(`Backend running on port ${PORT}`);
+// --- NEW: INVENTORY ROUTES ---
+app.get('/admin_fetch_inventory', (req, res) => {
+  db.query("SELECT * FROM inventory", (err, results) => {
+    if (err) return res.status(500).json({ success: false, message: "Database error" });
+    res.json({ success: true, inventory: results });
+  });
 });
+
+app.post('/admin_delete_inventory', (req, res) => {
+  const { id } = req.body;
+  db.query("DELETE FROM inventory WHERE id = ?", [id], (err) => {
+    if (err) return res.status(500).json({ success: false, message: "Database error" });
+    res.json({ success: true, message: "Inventory deleted" });
+  });
+});
+
+// --- NEW: MENU ROUTES ---
+app.get('/admin_fetch_menu', (req, res) => {
+  db.query("SELECT * FROM menu_items", (err, results) => {
+    if (err) return res.status(500).json({ success: false, message: "Database error" });
+    res.json({ success: true, menu: results });
+  });
+});
+
+app.post('/admin_delete_menu', (req, res) => {
+  const { id } = req.body;
+  db.query("DELETE FROM menu_items WHERE id = ?", [id], (err) => {
+    if (err) return res.status(500).json({ success: false, message: "Database error" });
+    res.json({ success: true, message: "Menu item deleted" });
+  });
+});
+
+app.listen(PORT, () => console.log(`Backend running on port ${PORT}`));
