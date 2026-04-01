@@ -26,6 +26,7 @@ const storage = multer.diskStorage({
 const upload = multer({ storage: storage });
 
 // --- Database Connection ---
+// FIX: Using createPool instead of createConnection prevents idle timeouts!
 const db = mysql.createPool({
   host: process.env.DB_HOST,
   port: process.env.DB_PORT,
@@ -105,17 +106,18 @@ app.get('/fetch_user_appointments', (req, res) => {
   });
 });
 
-// FIXED: This route now uses 'booking_id' to match your SQL schema
 app.get('/fetch_user_transactions', async (req, res) => {
   const userId = req.query.user_id;
   if (!userId) return res.status(400).json({ success: false, message: "User ID required" });
 
   try {
     const promiseDb = db.promise();
+
+    // 1. Fetch Payments (Linking payments to the user's appointments)
     const [transactions] = await promiseDb.query(`
       SELECT p.id, p.amount_paid, p.payment_date, p.payment_method, a.status, a.event_type, a.preferred_date 
       FROM payments p
-      JOIN appointments a ON p.booking_id = a.id
+      JOIN appointments a ON p.appointment_id = a.id
       WHERE a.user_id = ?
       ORDER BY p.payment_date DESC
     `, [userId]);
@@ -125,6 +127,7 @@ app.get('/fetch_user_transactions', async (req, res) => {
         total_spent += parseFloat(t.amount_paid || 0);
     });
 
+    // 2. Fetch Booking Stats
     const [statsResult] = await promiseDb.query(`
       SELECT 
         COUNT(*) as total_bookings,
@@ -135,6 +138,7 @@ app.get('/fetch_user_transactions', async (req, res) => {
     `, [userId]);
 
     const stats = statsResult[0] || {};
+
     return res.json({
       success: true,
       transactions: transactions,
@@ -146,6 +150,7 @@ app.get('/fetch_user_transactions', async (req, res) => {
         total_spent: total_spent
       }
     });
+
   } catch (error) {
     console.error("Transaction Fetch Error:", error);
     return res.status(500).json({ success: false, message: "Database error" });
@@ -189,8 +194,7 @@ app.get('/admin_fetch_dashboard_stats', async (req, res) => {
 });
 
 app.get('/admin_fetch_bookings', (req, res) => {
-  // FIXED: Changed 'p.appointment_id' to 'p.booking_id'
-  db.query(`SELECT a.*, u.username as customer_name, u.email as customer_email, COALESCE(SUM(p.amount_paid), 0) as amount_paid, (COALESCE(a.total_cost, 0) - COALESCE(SUM(p.amount_paid), 0)) as balance FROM appointments a LEFT JOIN users u ON a.user_id = u.id LEFT JOIN payments p ON a.id = p.booking_id GROUP BY a.id ORDER BY a.created_at DESC`, (err, results) => {
+  db.query(`SELECT a.*, u.username as customer_name, u.email as customer_email, COALESCE(SUM(p.amount_paid), 0) as amount_paid, (COALESCE(a.total_cost, 0) - COALESCE(SUM(p.amount_paid), 0)) as balance FROM appointments a LEFT JOIN users u ON a.user_id = u.id LEFT JOIN payments p ON a.id = p.appointment_id GROUP BY a.id ORDER BY a.created_at DESC`, (err, results) => {
     if (err) return res.status(500).json({ success: false, message: "Database error" });
     return res.json({ success: true, bookings: results });
   });
@@ -199,7 +203,7 @@ app.get('/admin_fetch_bookings', (req, res) => {
 app.post('/admin_update_booking_status', (req, res) => {
   const { bookingId, status } = req.body;
   const sql = status === 'Confirmed' ? "UPDATE appointments SET status = ?, total_cost = COALESCE(total_cost, 30000.00) WHERE id = ?" : "UPDATE appointments SET status = ? WHERE id = ?";
-  db.query(sql, [bookingId, status], (err) => {
+  db.query(sql, [status, bookingId], (err) => {
     if (err) return res.status(500).json({ success: false, message: "Database error" });
     return res.json({ success: true, message: "Status updated" });
   });
@@ -287,25 +291,24 @@ app.post('/admin_delete_staff', (req, res) => {
 // 5. ADMIN - PAYMENTS, REPORTS, VERIFY
 // ==========================================
 app.get('/admin_fetch_payment_history', (req, res) => {
-  // FIXED: Changed 'appointment_id' to 'booking_id'
-  db.query("SELECT * FROM payments WHERE booking_id = ? ORDER BY payment_date DESC", [req.query.appointmentId], (err, r) => {
+  db.query("SELECT * FROM payments WHERE appointment_id = ? ORDER BY transaction_date DESC", [req.query.appointmentId], (err, r) => {
     if (err) return res.status(500).json({ success: false, message: "Database error" });
     return res.json({ success: true, history: r });
   });
 });
-
 app.post('/admin_process_payment', (req, res) => {
   const appointmentId = req.body.appointmentId;
   const amount = req.body.amount;
+  // This automatically grabs the payment method sent from your frontend
   const paymentMethod = req.body.paymentMethod || req.body.paymentType || 'Cash'; 
 
-  // FIXED: Changed 'appointment_id' to 'booking_id'
+  // Safely inserts into the correct 'payment_method' column and removes the 'remarks' column
   db.query(
-    "INSERT INTO payments (booking_id, amount_paid, payment_method) VALUES (?, ?, ?)", 
+    "INSERT INTO payments (appointment_id, amount_paid, payment_method) VALUES (?, ?, ?)", 
     [appointmentId, amount, paymentMethod], 
     (err) => {
       if (err) {
-        console.error("Payment Insert Error:", err);
+        console.error("Payment Insert Error:", err); // Helps us see the exact error if it fails again
         return res.status(500).json({ success: false, message: "Database error" });
       }
       return res.json({ success: true });
