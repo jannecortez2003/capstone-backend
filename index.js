@@ -26,7 +26,6 @@ const storage = multer.diskStorage({
 const upload = multer({ storage: storage });
 
 // --- Database Connection ---
-// FIX: Using createPool instead of createConnection prevents idle timeouts!
 const db = mysql.createPool({
   host: process.env.DB_HOST,
   port: process.env.DB_PORT,
@@ -113,13 +112,13 @@ app.get('/fetch_user_transactions', async (req, res) => {
   try {
     const promiseDb = db.promise();
 
-    // 1. Fetch Payments (Linking payments to the user's appointments)
+    // FIXED: Maps database column 'transaction_date' and 'payment_type' correctly
     const [transactions] = await promiseDb.query(`
-      SELECT p.id, p.amount_paid, p.payment_date, p.payment_method, a.status, a.event_type, a.preferred_date 
+      SELECT p.id, p.amount_paid, p.transaction_date as payment_date, p.payment_type as payment_method, p.remarks, a.status, a.event_type, a.preferred_date 
       FROM payments p
       JOIN appointments a ON p.appointment_id = a.id
       WHERE a.user_id = ?
-      ORDER BY p.payment_date DESC
+      ORDER BY p.transaction_date DESC
     `, [userId]);
 
     let total_spent = 0;
@@ -127,7 +126,6 @@ app.get('/fetch_user_transactions', async (req, res) => {
         total_spent += parseFloat(t.amount_paid || 0);
     });
 
-    // 2. Fetch Booking Stats
     const [statsResult] = await promiseDb.query(`
       SELECT 
         COUNT(*) as total_bookings,
@@ -158,60 +156,31 @@ app.get('/fetch_user_transactions', async (req, res) => {
 });
 
 app.post('/book_event', (req, res) => {
-  const { userId, eventType, packageType, preferredDate, guestCount, selectedDishes, notes } = req.body;
-  db.query(`INSERT INTO appointments (user_id, event_type, package_type, preferred_date, guest_count, selected_dishes, required_inventory, notes, status) VALUES (?, ?, ?, ?, ?, ?, '', ?, 'Pending')`, 
-  [userId, eventType, packageType, preferredDate, guestCount, selectedDishes, notes || ''], (err, result) => {
-    if (err) return res.status(500).json({ success: false, message: "Database error" });
+  // FIXED: Removed 'notes' since it does not exist in your SQL table
+  const { userId, eventType, packageType, preferredDate, guestCount, selectedDishes } = req.body;
+  
+  db.query(`INSERT INTO appointments (user_id, event_type, package_type, preferred_date, guest_count, selected_dishes, required_inventory, status) VALUES (?, ?, ?, ?, ?, ?, '', 'Pending')`, 
+  [userId, eventType, packageType, preferredDate, guestCount, selectedDishes], (err, result) => {
+    if (err) {
+      console.error("Booking Error:", err);
+      return res.status(500).json({ success: false, message: "Database error" });
+    }
     return res.json({ success: true, message: "Event booking successful!", booking_id: result.insertId });
   });
 });
 
-// User Uploads ID Verification
 app.post('/verify', upload.single('idImage'), (req, res) => {
-  // Added phone and email here
   const { userId, idType, idNumber, lastName, firstName, address, phone, email } = req.body;
   const imagePath = req.file ? req.file.path : '';
   
-  // FIXED: Changed table to 'verification_requests' and added phone/email columns
+  // FIXED: Changed table to verification_requests
   db.query("INSERT INTO verification_requests (user_id, id_type, id_number, first_name, last_name, address, phone, email, id_image_path, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'Pending')", 
   [userId, idType, idNumber, firstName, lastName, address, phone, email, imagePath], (err) => {
-    
     if (err) {
-      console.error("Database error during verification:", err);
+      console.error("Verification Error:", err);
       return res.status(500).json({ success: false, message: "Database error" });
     }
-    
     return res.json({ success: true, message: "Verification submitted. Please wait for admin approval." });
-  });
-});
-
-// Admin Fetches Verifications
-app.get('/admin_fetch_verification', (req, res) => {
-  // FIXED: Changed table to 'verification_requests'
-  db.query("SELECT * FROM verification_requests WHERE status = 'Pending'", (err, r) => {
-    if (err) return res.status(500).json({ success: false, message: "Database error" });
-    return res.json({ success: true, requests: r });
-  });
-});
-
-// Admin Approves/Rejects Verifications
-app.post('/admin_verify_user', (req, res) => {
-  const { requestId, status } = req.body;
-  // FIXED: Changed table to 'verification_requests'
-  db.query("UPDATE verification_requests SET status = ? WHERE id = ?", [status, requestId], (err) => {
-    if (err) {
-      console.error("Database error during verification:", err);
-      // Temporarily send the EXACT SQL error to the frontend so we can read it!
-      return res.status(500).json({ success: false, message: "SQL Error: " + err.message });
-    }
-    
-    if (status === 'Verified') {
-        // FIXED: Changed table to 'verification_requests'
-        db.query("UPDATE users SET is_verified = 1 WHERE id = (SELECT user_id FROM verification_requests WHERE id = ?)", [requestId], (updateErr) => {
-            if (updateErr) console.error("Failed to verify user account:", updateErr);
-        });
-    }
-    return res.json({ success: true });
   });
 });
 
@@ -330,24 +299,23 @@ app.post('/admin_delete_staff', (req, res) => {
 // 5. ADMIN - PAYMENTS, REPORTS, VERIFY
 // ==========================================
 app.get('/admin_fetch_payment_history', (req, res) => {
+  // FIXED: Using 'transaction_date' to match your schema
   db.query("SELECT * FROM payments WHERE appointment_id = ? ORDER BY transaction_date DESC", [req.query.appointmentId], (err, r) => {
     if (err) return res.status(500).json({ success: false, message: "Database error" });
     return res.json({ success: true, history: r });
   });
 });
-app.post('/admin_process_payment', (req, res) => {
-  const appointmentId = req.body.appointmentId;
-  const amount = req.body.amount;
-  // This automatically grabs the payment method sent from your frontend
-  const paymentMethod = req.body.paymentMethod || req.body.paymentType || 'Cash'; 
 
-  // Safely inserts into the correct 'payment_method' column and removes the 'remarks' column
+app.post('/admin_process_payment', (req, res) => {
+  const { appointmentId, amount, paymentType, remarks } = req.body;
+  
+  // FIXED: Uses 'payment_type' and 'remarks' directly
   db.query(
-    "INSERT INTO payments (appointment_id, amount_paid, payment_method) VALUES (?, ?, ?)", 
-    [appointmentId, amount, paymentMethod], 
+    "INSERT INTO payments (appointment_id, amount_paid, payment_type, remarks) VALUES (?, ?, ?, ?)", 
+    [appointmentId, amount, paymentType || 'Additional', remarks || ''], 
     (err) => {
       if (err) {
-        console.error("Payment Insert Error:", err); // Helps us see the exact error if it fails again
+        console.error("Payment Insert Error:", err);
         return res.status(500).json({ success: false, message: "Database error" });
       }
       return res.json({ success: true });
@@ -368,7 +336,8 @@ app.get('/admin_fetch_reports', async (req, res) => {
 });
 
 app.get('/admin_fetch_verification', (req, res) => {
-  db.query("SELECT * FROM user_verifications WHERE status = 'Pending'", (err, r) => {
+  // FIXED: Changed table to verification_requests
+  db.query("SELECT * FROM verification_requests WHERE status = 'Pending'", (err, r) => {
     if (err) return res.status(500).json({ success: false, message: "Database error" });
     return res.json({ success: true, requests: r });
   });
@@ -376,11 +345,13 @@ app.get('/admin_fetch_verification', (req, res) => {
 
 app.post('/admin_verify_user', (req, res) => {
   const { requestId, status } = req.body;
-  db.query("UPDATE user_verifications SET status = ? WHERE id = ?", [status, requestId], (err) => {
+  
+  // FIXED: Changed table to verification_requests
+  db.query("UPDATE verification_requests SET status = ? WHERE id = ?", [status, requestId], (err) => {
     if (err) return res.status(500).json({ success: false, message: "Database error" });
     
     if (status === 'Verified') {
-        db.query("UPDATE users SET is_verified = 1 WHERE id = (SELECT user_id FROM user_verifications WHERE id = ?)", [requestId], (updateErr) => {
+        db.query("UPDATE users SET is_verified = 1 WHERE id = (SELECT user_id FROM verification_requests WHERE id = ?)", [requestId], (updateErr) => {
             if (updateErr) console.error("Failed to verify user account:", updateErr);
         });
     }
