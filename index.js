@@ -35,6 +35,9 @@ const db = mysql.createPool({
   waitForConnections: true,
   connectionLimit: 10,
   queueLimit: 0
+    ssl: {
+    rejectUnauthorized: true 
+  }
 });
 
 app.get('/', (req, res) => res.send('Node.js Backend is running perfectly!'));
