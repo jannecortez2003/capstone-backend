@@ -205,8 +205,26 @@ app.get('/admin_fetch_dashboard_stats', async (req, res) => {
 });
 
 app.get('/admin_fetch_bookings', (req, res) => {
-  db.query(`SELECT a.*, u.username as customer_name, u.email as customer_email, COALESCE(SUM(p.amount_paid), 0) as amount_paid, (COALESCE(a.total_cost, 0) - COALESCE(SUM(p.amount_paid), 0)) as balance FROM appointments a LEFT JOIN users u ON a.user_id = u.id LEFT JOIN payments p ON a.id = p.appointment_id GROUP BY a.id ORDER BY a.created_at DESC`, (err, results) => {
-    if (err) return res.status(500).json({ success: false, message: "Database error" });
+  // FIX: Added u.username and u.email to the GROUP BY clause to prevent SQL strict mode crashes
+  const query = `
+    SELECT 
+      a.*, 
+      u.username as customer_name, 
+      u.email as customer_email, 
+      COALESCE(SUM(p.amount_paid), 0) as amount_paid, 
+      (COALESCE(a.total_cost, 0) - COALESCE(SUM(p.amount_paid), 0)) as balance 
+    FROM appointments a 
+    LEFT JOIN users u ON a.user_id = u.id 
+    LEFT JOIN payments p ON a.id = p.appointment_id 
+    GROUP BY a.id, u.username, u.email 
+    ORDER BY a.created_at DESC
+  `;
+  
+  db.query(query, (err, results) => {
+    if (err) {
+      console.error("Fetch Bookings Error:", err);
+      return res.status(500).json({ success: false, message: "Database error" });
+    }
     return res.json({ success: true, bookings: results });
   });
 });
