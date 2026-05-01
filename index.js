@@ -35,206 +35,209 @@ const db = mysql.createPool({
   waitForConnections: true,
   connectionLimit: 10,
   queueLimit: 0,
-    ssl: {
+  ssl: {
     rejectUnauthorized: true 
   }
 });
 
-app.get('/', (req, res) => res.send('Node.js Backend is running perfectly!'));
+app.get('/', (req, res) => {
+  res.send('Node.js Backend is running perfectly!');
+});
 
 // ==========================================
-// 1. AUTHENTICATION & USERS
+// 1. AUTHENTICATION ROUTES (Login & Register)
 // ==========================================
+
 app.post('/register', async (req, res) => {
   const { name, email, password } = req.body;
+  if (!name || !email || !password) return res.status(400).json({ success: false, message: "Missing required fields" });
+
   db.query("SELECT id FROM users WHERE email = ?", [email], async (err, results) => {
     if (err) return res.status(500).json({ success: false, message: "Database error" });
     if (results.length > 0) return res.status(400).json({ success: false, message: "Email already registered" });
-    
-    try {
-        const hashedPassword = await bcrypt.hash(password, 10);
-        db.query("INSERT INTO users (username, email, password, is_verified) VALUES (?, ?, ?, 0)", [name, email, hashedPassword], (err, result) => {
-          if (err) return res.status(500).json({ success: false, message: "Registration failed" });
-          return res.json({ success: true, message: "User registered", user: { id: result.insertId, fullName: name, email, verified: false } });
-        });
-    } catch (error) {
-        return res.status(500).json({ success: false, message: "Encryption error" });
-    }
+
+    const hashedPassword = await bcrypt.hash(password, 10);
+
+    db.query("INSERT INTO users (username, email, password, is_verified) VALUES (?, ?, ?, 0)", [name, email, hashedPassword], (err, result) => {
+      if (err) return res.status(500).json({ success: false, message: "Registration failed" });
+      res.json({
+        success: true,
+        message: "User registered successfully",
+        user: { id: result.insertId, fullName: name, email: email, verified: false }
+      });
+    });
   });
 });
 
 app.post('/login', (req, res) => {
   const { email, password } = req.body; 
+  if (!email || !password) return res.status(400).json({ success: false, message: "Missing credentials" });
+
   db.query("SELECT * FROM users WHERE email = ? OR username = ? LIMIT 1", [email, email], async (err, results) => {
     if (err) return res.status(500).json({ success: false, message: "Database error" });
-    if (results.length === 0) return res.status(400).json({ success: false, message: "No user found" });
-    
+    if (results.length === 0) return res.status(400).json({ success: false, message: "No user found with that email or name" });
+
     const user = results[0];
-    try {
-        let isMatch = (user.password && user.password.startsWith('$2')) ? await bcrypt.compare(password, user.password) : (password === user.password);
-        if (isMatch) return res.json({ success: true, message: "Login successful", user: { id: user.id, fullName: user.username, email: user.email, verified: Boolean(user.is_verified) } });
-        return res.status(400).json({ success: false, message: "Invalid password" });
-    } catch (error) {
-        return res.status(500).json({ success: false, message: "Verification error" });
+    
+    const isMatch = await bcrypt.compare(password, user.password);
+    if (isMatch) {
+      res.json({
+        success: true,
+        message: "Login successful",
+        user: { id: user.id, fullName: user.username, email: user.email, verified: Boolean(user.is_verified) }
+      });
+    } else {
+      res.status(400).json({ success: false, message: "Invalid password" });
     }
   });
 });
 
 app.post('/adminlogin', (req, res) => {
   const { username, password } = req.body;
+  if (!username || !password) {
+    return res.status(400).json({ success: false, message: "Missing fields" });
+  }
+
   db.query("SELECT * FROM admins WHERE username = ?", [username], (err, results) => {
     if (err) return res.status(500).json({ success: false, message: "Database error" });
     if (results.length === 0) return res.status(400).json({ success: false, message: "Admin not found" });
-    
-    if (password === results[0].password) return res.json({ success: true, message: "Login successful", admin: { id: results[0].id, username: results[0].username, role: 'admin' } });
-    return res.status(400).json({ success: false, message: "Invalid password" });
+
+    const admin = results[0];
+
+    if (password === admin.password) {
+      res.json({
+        success: true,
+        message: "Login successful",
+        admin: { id: admin.id, username: admin.username, role: 'admin' }
+      });
+    } else {
+      res.status(400).json({ success: false, message: "Invalid password" });
+    }
   });
 });
 
 // ==========================================
-// 2. CLIENT BOOKING & VERIFICATION
+// 2. CLIENT BOOKING ROUTES
 // ==========================================
+
 app.get('/fetch_booked_dates', (req, res) => {
   db.query("SELECT preferred_date FROM appointments WHERE status != 'Cancelled'", (err, results) => {
     if (err) return res.status(500).json({ success: false, message: "Database error" });
-    return res.json({ success: true, bookedDates: results.map(row => row.preferred_date) });
+    const bookedDates = results.map(row => row.preferred_date);
+    res.json({ success: true, bookedDates });
   });
 });
 
 app.get('/fetch_user_appointments', (req, res) => {
-  db.query("SELECT * FROM appointments WHERE user_id = ? ORDER BY created_at DESC", [req.query.user_id], (err, results) => {
-    if (err) return res.status(500).json({ success: false, message: "Database error" });
-    return res.json({ success: true, appointments: results });
+  const userId = req.query.user_id; 
+  if (!userId) return res.status(400).json({ success: false, message: "User ID is required." });
+
+  const sql = "SELECT id, event_type, package_type, preferred_date, guest_count, status, total_cost FROM appointments WHERE user_id = ? ORDER BY created_at DESC";
+  db.query(sql, [userId], (err, results) => {
+    if (err) return res.status(500).json({ success: false, message: "Error fetching appointments" });
+    res.json({ success: true, appointments: results });
   });
-});
-
-app.get('/fetch_user_transactions', async (req, res) => {
-  const userId = req.query.user_id;
-  if (!userId) return res.status(400).json({ success: false, message: "User ID required" });
-
-  try {
-    const promiseDb = db.promise();
-
-    // FIXED: Maps database column 'transaction_date' and 'payment_type' correctly
-    const [transactions] = await promiseDb.query(`
-      SELECT p.id, p.amount_paid, p.transaction_date as payment_date, p.payment_type as payment_method, p.remarks, a.status, a.event_type, a.preferred_date 
-      FROM payments p
-      JOIN appointments a ON p.appointment_id = a.id
-      WHERE a.user_id = ?
-      ORDER BY p.transaction_date DESC
-    `, [userId]);
-
-    let total_spent = 0;
-    transactions.forEach(t => {
-        total_spent += parseFloat(t.amount_paid || 0);
-    });
-
-    const [statsResult] = await promiseDb.query(`
-      SELECT 
-        COUNT(*) as total_bookings,
-        SUM(CASE WHEN status = 'Pending' THEN 1 ELSE 0 END) as pending,
-        SUM(CASE WHEN status = 'Confirmed' THEN 1 ELSE 0 END) as confirmed,
-        SUM(CASE WHEN status = 'Completed' THEN 1 ELSE 0 END) as completed
-      FROM appointments WHERE user_id = ?
-    `, [userId]);
-
-    const stats = statsResult[0] || {};
-
-    return res.json({
-      success: true,
-      transactions: transactions,
-      stats: {
-        total_bookings: stats.total_bookings || 0,
-        pending: stats.pending || 0,
-        confirmed: stats.confirmed || 0,
-        completed: stats.completed || 0,
-        total_spent: total_spent
-      }
-    });
-
-  } catch (error) {
-    console.error("Transaction Fetch Error:", error);
-    return res.status(500).json({ success: false, message: "Database error" });
-  }
 });
 
 app.post('/book_event', (req, res) => {
-  // FIXED: Removed 'notes' since it does not exist in your SQL table
-  const { userId, eventType, packageType, preferredDate, guestCount, selectedDishes } = req.body;
-  
-  db.query(`INSERT INTO appointments (user_id, event_type, package_type, preferred_date, guest_count, selected_dishes, required_inventory, status) VALUES (?, ?, ?, ?, ?, ?, '', 'Pending')`, 
-  [userId, eventType, packageType, preferredDate, guestCount, selectedDishes], (err, result) => {
-    if (err) {
-      console.error("Booking Error:", err);
-      return res.status(500).json({ success: false, message: "Database error" });
-    }
-    return res.json({ success: true, message: "Event booking successful!", booking_id: result.insertId });
-  });
-});
+  const { userId, eventType, packageType, preferredDate, guestCount, selectedDishes, notes } = req.body;
+  if (!userId || !eventType || !packageType || !preferredDate || !guestCount || !selectedDishes) {
+    return res.status(400).json({ success: false, message: "All fields are required." });
+  }
 
-app.post('/verify', upload.single('idImage'), (req, res) => {
-  const { userId, idType, idNumber, lastName, firstName, address, phone, email } = req.body;
-  const imagePath = req.file ? req.file.path : '';
-  
-  // FIXED: Changed table to verification_requests
-  db.query("INSERT INTO verification_requests (user_id, id_type, id_number, first_name, last_name, address, phone, email, id_image_path, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'Pending')", 
-  [userId, idType, idNumber, firstName, lastName, address, phone, email, imagePath], (err) => {
-    if (err) {
-      console.error("Verification Error:", err);
-      return res.status(500).json({ success: false, message: "Database error" });
-    }
-    return res.json({ success: true, message: "Verification submitted. Please wait for admin approval." });
+  const inventoryNeedsPerGuest = { 'Chairs': 1, 'Plate': 1, 'Utensils - Spoon': 1, 'Utensils - Fork': 1 };
+  const inventoryNeedsRatio = { 'Table (10 seater)': 10 };
+  let requiredInventory = [];
+
+  for (const [item, itemsPerGuest] of Object.entries(inventoryNeedsPerGuest)) {
+    const quantity = itemsPerGuest * guestCount;
+    if (quantity > 0) requiredInventory.push(`${item}: ${quantity}`);
+  }
+  for (const [item, ratio] of Object.entries(inventoryNeedsRatio)) {
+    const quantity = Math.ceil(guestCount / ratio);
+    if (quantity > 0) requiredInventory.push(`${item}: ${quantity}`);
+  }
+  requiredInventory.push('Lights (assorted): 1');
+  const requiredInventoryStr = requiredInventory.join('; ');
+
+  const sql = `INSERT INTO appointments (user_id, event_type, package_type, preferred_date, guest_count, selected_dishes, required_inventory, status) VALUES (?, ?, ?, ?, ?, ?, ?, 'Pending')`;
+  db.query(sql, [userId, eventType, packageType, preferredDate, guestCount, selectedDishes, requiredInventoryStr], (err, result) => {
+    if (err) return res.status(500).json({ success: false, message: "Database error: " + err.message });
+    res.json({ success: true, message: "Event booking successful. We will contact you shortly!", booking_id: result.insertId });
   });
 });
 
 // ==========================================
 // 3. ADMIN DASHBOARD & BOOKINGS
 // ==========================================
+
 app.get('/admin_fetch_dashboard_stats', async (req, res) => {
   try {
-    const pDb = db.promise();
-    const [[b]] = await pDb.query("SELECT COUNT(*) as c FROM appointments");
-    const [[r]] = await pDb.query("SELECT SUM(amount_paid) as t FROM payments");
-    const [[m]] = await pDb.query("SELECT COUNT(*) as c FROM menu_items");
-    const [[u]] = await pDb.query("SELECT COUNT(*) as c FROM users WHERE is_verified = 1");
-    const [ev] = await pDb.query("SELECT * FROM appointments WHERE preferred_date >= CURDATE() ORDER BY preferred_date ASC LIMIT 5");
-    return res.json({ success: true, stats: { bookings: b.c||0, revenue: r.t||0, menuItems: m.c||0, customers: u.c||0 }, upcomingEvents: ev });
-  } catch (e) { 
-    return res.status(500).json({ success: false, message: "Database error" }); 
+    const promiseDb = db.promise();
+    const [[bookingsRow]] = await promiseDb.query("SELECT COUNT(*) as count FROM appointments");
+    const [[revenueRow]] = await promiseDb.query("SELECT SUM(amount_paid) as total FROM payments");
+    const [[menuRow]] = await promiseDb.query("SELECT COUNT(*) as count FROM menu_items");
+    const [[userRow]] = await promiseDb.query("SELECT COUNT(*) as count FROM users WHERE is_verified = 1");
+    
+    // FIX: Show all active (Pending/Confirmed) bookings so nothing is hidden
+    const [events] = await promiseDb.query("SELECT id, event_type, preferred_date, status FROM appointments WHERE status IN ('Pending', 'Confirmed') ORDER BY preferred_date ASC");
+
+    res.json({
+      success: true,
+      stats: {
+        bookings: bookingsRow?.count || 0,
+        revenue: revenueRow?.total || 0,
+        menuItems: menuRow?.count || 0,
+        customers: userRow?.count || 0
+      },
+      upcomingEvents: events
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, message: "Database error fetching stats" });
   }
 });
 
 app.get('/admin_fetch_bookings', (req, res) => {
-  // FIX: Added u.username and u.email to the GROUP BY clause to prevent SQL strict mode crashes
-  const query = `
-    SELECT 
-      a.*, 
-      u.username as customer_name, 
-      u.email as customer_email, 
-      COALESCE(SUM(p.amount_paid), 0) as amount_paid, 
-      (COALESCE(a.total_cost, 0) - COALESCE(SUM(p.amount_paid), 0)) as balance 
-    FROM appointments a 
+  // FIX: Grouped properly to prevent SQL Strict Mode from dropping the query
+  const sql = `
+    SELECT a.*, u.username as customer_name, u.email as customer_email,
+    COALESCE(SUM(p.amount_paid), 0) as amount_paid,
+    (a.total_cost - COALESCE(SUM(p.amount_paid), 0)) as balance
+    FROM appointments a
     LEFT JOIN users u ON a.user_id = u.id 
-    LEFT JOIN payments p ON a.id = p.appointment_id 
-    GROUP BY a.id, u.username, u.email 
-    ORDER BY a.created_at DESC
+    LEFT JOIN payments p ON a.id = p.appointment_id
+    GROUP BY a.id, u.username, u.email ORDER BY a.created_at DESC
   `;
-  
-  db.query(query, (err, results) => {
-    if (err) {
-      console.error("Fetch Bookings Error:", err);
-      return res.status(500).json({ success: false, message: "Database error" });
-    }
-    return res.json({ success: true, bookings: results });
+  db.query(sql, (err, results) => {
+    if (err) return res.status(500).json({ success: false, message: "Database error" });
+    
+    const formattedBookings = results.map(row => ({
+      ...row,
+      customer_name: row.customer_name || `Unknown User`,
+      customer_email: row.customer_email || "N/A",
+      total_cost: parseFloat(row.total_cost) || 0,
+      amount_paid: parseFloat(row.amount_paid) || 0,
+      balance: parseFloat(row.balance) || 0
+    }));
+    res.json({ success: true, bookings: formattedBookings });
   });
 });
 
 app.post('/admin_update_booking_status', (req, res) => {
   const { bookingId, status } = req.body;
-  const sql = status === 'Confirmed' ? "UPDATE appointments SET status = ?, total_cost = COALESCE(total_cost, 30000.00) WHERE id = ?" : "UPDATE appointments SET status = ? WHERE id = ?";
-  db.query(sql, [status, bookingId], (err) => {
-    if (err) return res.status(500).json({ success: false, message: "Database error" });
-    return res.json({ success: true, message: "Status updated" });
+  if (!bookingId || !status) return res.status(400).json({ success: false, message: "Missing data" });
+
+  let sql = "UPDATE appointments SET status = ? WHERE id = ?";
+  if (status === 'Confirmed') {
+    sql = "UPDATE appointments SET status = ?, total_cost = COALESCE(total_cost, 30000.00) WHERE id = ?";
+  }
+
+  db.query("ALTER TABLE appointments MODIFY COLUMN status ENUM('Pending', 'Confirmed', 'Cancelled', 'Completed') NOT NULL DEFAULT 'Pending'", (err) => {
+    db.query(sql, [status, bookingId], (err, result) => {
+      if (err) return res.status(500).json({ success: false, message: "Error updating status" });
+      res.json({ success: true, message: `Booking #${bookingId} status successfully updated to ${status}.` });
+    });
   });
 });
 
@@ -316,11 +319,7 @@ app.post('/admin_delete_staff', (req, res) => {
     });
 });
 
-// ==========================================
-// 5. ADMIN - PAYMENTS, REPORTS, VERIFY
-// ==========================================
 app.get('/admin_fetch_payment_history', (req, res) => {
-  // FIXED: Using 'transaction_date' to match your schema
   db.query("SELECT * FROM payments WHERE appointment_id = ? ORDER BY transaction_date DESC", [req.query.appointmentId], (err, r) => {
     if (err) return res.status(500).json({ success: false, message: "Database error" });
     return res.json({ success: true, history: r });
@@ -329,8 +328,6 @@ app.get('/admin_fetch_payment_history', (req, res) => {
 
 app.post('/admin_process_payment', (req, res) => {
   const { appointmentId, amount, paymentType, remarks } = req.body;
-  
-  // FIXED: Uses 'payment_type' and 'remarks' directly
   db.query(
     "INSERT INTO payments (appointment_id, amount_paid, payment_type, remarks) VALUES (?, ?, ?, ?)", 
     [appointmentId, amount, paymentType || 'Additional', remarks || ''], 
@@ -357,7 +354,6 @@ app.get('/admin_fetch_reports', async (req, res) => {
 });
 
 app.get('/admin_fetch_verification', (req, res) => {
-  // FIXED: Changed table to verification_requests
   db.query("SELECT * FROM verification_requests WHERE status = 'Pending'", (err, r) => {
     if (err) return res.status(500).json({ success: false, message: "Database error" });
     return res.json({ success: true, requests: r });
@@ -366,8 +362,6 @@ app.get('/admin_fetch_verification', (req, res) => {
 
 app.post('/admin_verify_user', (req, res) => {
   const { requestId, status } = req.body;
-  
-  // FIXED: Changed table to verification_requests
   db.query("UPDATE verification_requests SET status = ? WHERE id = ?", [status, requestId], (err) => {
     if (err) return res.status(500).json({ success: false, message: "Database error" });
     
