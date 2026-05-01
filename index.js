@@ -224,21 +224,83 @@ app.get('/admin_fetch_bookings', (req, res) => {
   });
 });
 
-app.post('/admin_update_booking_status', (req, res) => {
+app.post('/admin_update_booking_status', async (req, res) => {
   const { bookingId, status } = req.body;
   if (!bookingId || !status) return res.status(400).json({ success: false, message: "Missing data" });
 
-  let sql = "UPDATE appointments SET status = ? WHERE id = ?";
-  if (status === 'Confirmed') {
-    sql = "UPDATE appointments SET status = ?, total_cost = COALESCE(total_cost, 30000.00) WHERE id = ?";
-  }
+  try {
+    const pDb = db.promise();
+    
+    // SMART INVENTORY AUTO-DEDUCTION
+    if (status === 'Confirmed') {
+      // Fetch the booking details to get the required inventory
+      const [rows] = await pDb.query("SELECT required_inventory, status FROM appointments WHERE id = ?", [bookingId]);
+      const booking = rows[0];
 
-  db.query("ALTER TABLE appointments MODIFY COLUMN status ENUM('Pending', 'Confirmed', 'Cancelled', 'Completed') NOT NULL DEFAULT 'Pending'", (err) => {
-    db.query(sql, [status, bookingId], (err, result) => {
-      if (err) return res.status(500).json({ success: false, message: "Error updating status" });
-      res.json({ success: true, message: `Booking #${bookingId} status successfully updated to ${status}.` });
-    });
-  });
+      // Only deduct if it wasn't already confirmed (prevents double deduction)
+      if (booking.status !== 'Confirmed' && booking.required_inventory) {
+        const items = booking.required_inventory.split('; '); // e.g. ["Chairs: 50", "Plate: 50"]
+        
+        for (let itemStr of items) {
+          const [itemName, qtyStr] = itemStr.split(': ');
+          const qtyToDeduct = parseInt(qtyStr);
+          
+          if (itemName && qtyToDeduct > 0) {
+            // Subtract from inventory
+            await pDb.query("UPDATE inventory SET quantity = quantity - ? WHERE name = ?", [qtyToDeduct, itemName]);
+          }
+        }
+      }
+      // Update appointment to confirmed and set standard cost
+      await pDb.query("UPDATE appointments SET status = ?, total_cost = COALESCE(total_cost, 30000.00) WHERE id = ?", [status, bookingId]);
+    } else {
+      // For Pending or Cancelled
+      await pDb.query("UPDATE appointments SET status = ? WHERE id = ?", [status, bookingId]);
+    }
+
+    res.json({ success: true, message: `Booking #${bookingId} status successfully updated to ${status}. Inventory adjusted.` });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, message: "Error updating status or inventory." });
+  }
+});
+
+app.post('/admin_reconcile_booking', async (req, res) => {
+  const { bookingId, damagedItems } = req.body; 
+  // damagedItems will look like: { 'Chairs': 2, 'Plate': 5 }
+
+  try {
+    const pDb = db.promise();
+    
+    // Fetch what was originally allocated for this event
+    const [rows] = await pDb.query("SELECT required_inventory FROM appointments WHERE id = ?", [bookingId]);
+    const reqInv = rows[0].required_inventory;
+    
+    if (reqInv) {
+      const items = reqInv.split('; ');
+      for (let itemStr of items) {
+        const [itemName, allocatedQtyStr] = itemStr.split(': ');
+        const allocatedQty = parseInt(allocatedQtyStr);
+        
+        // Find if any were damaged, default to 0 if none
+        const damagedQty = damagedItems[itemName] ? parseInt(damagedItems[itemName]) : 0;
+        
+        // Calculate how many to return to the warehouse
+        const returnQty = allocatedQty - damagedQty;
+        
+        if (returnQty > 0) {
+          await pDb.query("UPDATE inventory SET quantity = quantity + ? WHERE name = ?", [returnQty, itemName]);
+        }
+      }
+    }
+    
+    // Mark event as completed
+    await pDb.query("UPDATE appointments SET status = 'Completed' WHERE id = ?", [bookingId]);
+    res.json({ success: true, message: "Event completed and inventory successfully reconciled!" });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, message: "Error reconciling inventory." });
+  }
 });
 
 // ==========================================
