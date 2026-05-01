@@ -179,7 +179,7 @@ app.get('/admin_fetch_dashboard_stats', async (req, res) => {
     const [[menuRow]] = await promiseDb.query("SELECT COUNT(*) as count FROM menu_items");
     const [[userRow]] = await promiseDb.query("SELECT COUNT(*) as count FROM users WHERE is_verified = 1");
     
-    // FIX: Show all active (Pending/Confirmed) bookings so nothing is hidden
+    // FIX: Show all active/pending bookings so nothing is hidden
     const [events] = await promiseDb.query("SELECT id, event_type, preferred_date, status FROM appointments WHERE status IN ('Pending', 'Confirmed') ORDER BY preferred_date ASC");
 
     res.json({
@@ -319,6 +319,19 @@ app.post('/admin_delete_staff', (req, res) => {
     });
 });
 
+app.get('/admin_fetch_all_payments', (req, res) => {
+  const sql = `
+    SELECT p.*, a.event_type, u.username as customer_name 
+    FROM payments p 
+    LEFT JOIN appointments a ON p.appointment_id = a.id 
+    LEFT JOIN users u ON a.user_id = u.id 
+    ORDER BY p.transaction_date DESC
+  `;
+  db.query(sql, (err, results) => {
+    if (err) return res.status(500).json({ success: false, message: "Database error" });
+    res.json({ success: true, payments: results });
+  });
+});
 app.get('/admin_fetch_payment_history', (req, res) => {
   db.query("SELECT * FROM payments WHERE appointment_id = ? ORDER BY transaction_date DESC", [req.query.appointmentId], (err, r) => {
     if (err) return res.status(500).json({ success: false, message: "Database error" });
@@ -337,6 +350,29 @@ app.post('/admin_process_payment', (req, res) => {
         return res.status(500).json({ success: false, message: "Database error" });
       }
       return res.json({ success: true });
+  });
+});
+
+// ADMIN LOGS
+
+app.get('/admin_fetch_users', (req, res) => {
+  db.query("SELECT id, username, email, is_verified, created_at FROM users ORDER BY created_at DESC", (err, results) => {
+    if (err) return res.status(500).json({ success: false, message: "Database error" });
+    res.json({ success: true, users: results });
+  });
+});
+app.get('/admin_fetch_activity_logs', (req, res) => {
+  const sql = `
+    SELECT 'Booking' as type, created_at as date, CONCAT('New booking created for ', event_type) as description FROM appointments
+    UNION ALL
+    SELECT 'Payment' as type, transaction_date as date, CONCAT('Payment of ₱', amount_paid, ' received via ', payment_type) as description FROM payments
+    UNION ALL
+    SELECT 'User' as type, created_at as date, CONCAT('New user registered: ', username) as description FROM users
+    ORDER BY date DESC LIMIT 50
+  `;
+  db.query(sql, (err, results) => {
+    if (err) return res.status(500).json({ success: false, message: "Database error" });
+    res.json({ success: true, logs: results });
   });
 });
 
