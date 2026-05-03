@@ -44,6 +44,16 @@ app.get('/', (req, res) => {
   res.send('Node.js Backend is running perfectly!');
 });
 
+// Helper function to log system activities
+async function logSystemActivity(type, description) {
+    try {
+        const pDb = db.promise();
+        await pDb.query("INSERT INTO activity_logs (type, description) VALUES (?, ?)", [type, description]);
+    } catch (err) {
+        console.error("Failed to log activity:", err);
+    }
+}
+
 // ==========================================
 // 1. AUTHENTICATION ROUTES (Login & Register)
 // ==========================================
@@ -179,7 +189,6 @@ app.get('/admin_fetch_dashboard_stats', async (req, res) => {
     const [[menuRow]] = await promiseDb.query("SELECT COUNT(*) as count FROM menu_items");
     const [[userRow]] = await promiseDb.query("SELECT COUNT(*) as count FROM users WHERE is_verified = 1");
     
-    // FIX: Show all active/pending bookings so nothing is hidden
     const [events] = await promiseDb.query("SELECT id, event_type, preferred_date, status FROM appointments WHERE status IN ('Pending', 'Confirmed') ORDER BY preferred_date ASC");
 
     res.json({
@@ -199,7 +208,6 @@ app.get('/admin_fetch_dashboard_stats', async (req, res) => {
 });
 
 app.get('/admin_fetch_bookings', (req, res) => {
-  // FIX: Grouped properly to prevent SQL Strict Mode from dropping the query
   const sql = `
     SELECT a.*, u.username as customer_name, u.email as customer_email,
     COALESCE(SUM(p.amount_paid), 0) as amount_paid,
@@ -231,34 +239,31 @@ app.post('/admin_update_booking_status', async (req, res) => {
   try {
     const pDb = db.promise();
     
-    // SMART INVENTORY AUTO-DEDUCTION
     if (status === 'Confirmed') {
-      // Fetch the booking details to get the required inventory
       const [rows] = await pDb.query("SELECT required_inventory, status FROM appointments WHERE id = ?", [bookingId]);
       const booking = rows[0];
 
-      // Only deduct if it wasn't already confirmed (prevents double deduction)
       if (booking.status !== 'Confirmed' && booking.required_inventory) {
-        const items = booking.required_inventory.split('; '); // e.g. ["Chairs: 50", "Plate: 50"]
+        const items = booking.required_inventory.split('; '); 
         
         for (let itemStr of items) {
           const [itemName, qtyStr] = itemStr.split(': ');
           const qtyToDeduct = parseInt(qtyStr);
           
           if (itemName && qtyToDeduct > 0) {
-            // Subtract from inventory
             await pDb.query("UPDATE inventory SET quantity = quantity - ? WHERE name = ?", [qtyToDeduct, itemName]);
+            await pDb.query("INSERT INTO inventory_logs (item_name, quantity_change, action_type, remarks) VALUES (?, ?, ?, ?)", 
+              [itemName, -qtyToDeduct, 'Auto-Deduction', `Allocated for Booking #${bookingId}`]
+            );
           }
         }
       }
-      // Update appointment to confirmed and set standard cost
       await pDb.query("UPDATE appointments SET status = ?, total_cost = COALESCE(total_cost, 30000.00) WHERE id = ?", [status, bookingId]);
     } else {
-      // For Pending or Cancelled
       await pDb.query("UPDATE appointments SET status = ? WHERE id = ?", [status, bookingId]);
     }
 
-    res.json({ success: true, message: `Booking #${bookingId} status successfully updated to ${status}. Inventory adjusted.` });
+    res.json({ success: true, message: `Booking #${bookingId} status successfully updated to ${status}.` });
   } catch (err) {
     console.error(err);
     res.status(500).json({ success: false, message: "Error updating status or inventory." });
@@ -267,12 +272,10 @@ app.post('/admin_update_booking_status', async (req, res) => {
 
 app.post('/admin_reconcile_booking', async (req, res) => {
   const { bookingId, damagedItems } = req.body; 
-  // damagedItems will look like: { 'Chairs': 2, 'Plate': 5 }
 
   try {
     const pDb = db.promise();
     
-    // Fetch what was originally allocated for this event
     const [rows] = await pDb.query("SELECT required_inventory FROM appointments WHERE id = ?", [bookingId]);
     const reqInv = rows[0].required_inventory;
     
@@ -281,20 +284,22 @@ app.post('/admin_reconcile_booking', async (req, res) => {
       for (let itemStr of items) {
         const [itemName, allocatedQtyStr] = itemStr.split(': ');
         const allocatedQty = parseInt(allocatedQtyStr);
-        
-        // Find if any were damaged, default to 0 if none
         const damagedQty = damagedItems[itemName] ? parseInt(damagedItems[itemName]) : 0;
-        
-        // Calculate how many to return to the warehouse
         const returnQty = allocatedQty - damagedQty;
         
         if (returnQty > 0) {
           await pDb.query("UPDATE inventory SET quantity = quantity + ? WHERE name = ?", [returnQty, itemName]);
+          await pDb.query("INSERT INTO inventory_logs (item_name, quantity_change, action_type, remarks) VALUES (?, ?, ?, ?)", 
+            [itemName, returnQty, 'Reconciliation Return', `Returned from Booking #${bookingId}. Damaged/Lost: ${damagedQty}`]
+          );
+        } else if (damagedQty > 0) {
+           await pDb.query("INSERT INTO inventory_logs (item_name, quantity_change, action_type, remarks) VALUES (?, ?, ?, ?)", 
+            [itemName, 0, 'Total Loss', `All ${damagedQty} items allocated to Booking #${bookingId} were damaged/lost.`]
+          );
         }
       }
     }
     
-    // Mark event as completed
     await pDb.query("UPDATE appointments SET status = 'Completed' WHERE id = ?", [bookingId]);
     res.json({ success: true, message: "Event completed and inventory successfully reconciled!" });
   } catch (err) {
@@ -312,21 +317,32 @@ app.get('/admin_fetch_inventory', (req, res) => {
         return res.json({ success: true, inventory: r });
     });
 });
+
+app.get('/admin_fetch_inventory_logs', (req, res) => {
+  db.query("SELECT * FROM inventory_logs ORDER BY created_at DESC", (err, results) => {
+    if (err) return res.status(500).json({ success: false, message: "Database error fetching inventory logs" });
+    res.json({ success: true, logs: results });
+  });
+});
+
 app.post('/admin_add_inventory', (req, res) => {
-    db.query("INSERT INTO inventory (name, quantity, unit) VALUES (?, ?, ?)", [req.body.name, req.body.quantity, req.body.unit], (err) => {
+    db.query("INSERT INTO inventory (name, quantity, unit) VALUES (?, ?, ?)", [req.body.name, req.body.quantity, req.body.unit], async (err) => {
         if (err) return res.status(500).json({ success: false, message: "Database error" });
+        await logSystemActivity('Inventory', `Added new inventory item: ${req.body.name} (${req.body.quantity} ${req.body.unit})`);
         return res.json({ success: true });
     });
 });
 app.post('/admin_update_inventory', (req, res) => {
-    db.query("UPDATE inventory SET name=?, quantity=?, unit=? WHERE id=?", [req.body.name, req.body.quantity, req.body.unit, req.body.id], (err) => {
+    db.query("UPDATE inventory SET name=?, quantity=?, unit=? WHERE id=?", [req.body.name, req.body.quantity, req.body.unit, req.body.id], async (err) => {
         if (err) return res.status(500).json({ success: false, message: "Database error" });
+        await logSystemActivity('Inventory', `Updated inventory item: ${req.body.name} to ${req.body.quantity} ${req.body.unit}`);
         return res.json({ success: true });
     });
 });
 app.post('/admin_delete_inventory', (req, res) => {
-    db.query("DELETE FROM inventory WHERE id = ?", [req.body.id], (err) => {
+    db.query("DELETE FROM inventory WHERE id = ?", [req.body.id], async (err) => {
         if (err) return res.status(500).json({ success: false, message: "Database error" });
+        await logSystemActivity('Inventory', `Deleted an inventory item (ID: ${req.body.id})`);
         return res.json({ success: true });
     });
 });
@@ -338,20 +354,23 @@ app.get('/admin_fetch_menu', (req, res) => {
     });
 });
 app.post('/admin_add_menu', (req, res) => {
-    db.query("INSERT INTO menu_items (name, category, price, description) VALUES (?, ?, ?, ?)", [req.body.name, req.body.category, req.body.price, req.body.description], (err) => {
+    db.query("INSERT INTO menu_items (name, category, price, description) VALUES (?, ?, ?, ?)", [req.body.name, req.body.category, req.body.price, req.body.description], async (err) => {
         if (err) return res.status(500).json({ success: false, message: "Database error" });
+        await logSystemActivity('Menu', `Added new menu item: ${req.body.name}`);
         return res.json({ success: true });
     });
 });
 app.post('/admin_update_menu', (req, res) => {
-    db.query("UPDATE menu_items SET name=?, category=?, price=?, description=? WHERE id=?", [req.body.name, req.body.category, req.body.price, req.body.description, req.body.id], (err) => {
+    db.query("UPDATE menu_items SET name=?, category=?, price=?, description=? WHERE id=?", [req.body.name, req.body.category, req.body.price, req.body.description, req.body.id], async (err) => {
         if (err) return res.status(500).json({ success: false, message: "Database error" });
+        await logSystemActivity('Menu', `Updated menu item: ${req.body.name}`);
         return res.json({ success: true });
     });
 });
 app.post('/admin_delete_menu', (req, res) => {
-    db.query("DELETE FROM menu_items WHERE id = ?", [req.body.id], (err) => {
+    db.query("DELETE FROM menu_items WHERE id = ?", [req.body.id], async (err) => {
         if (err) return res.status(500).json({ success: false, message: "Database error" });
+        await logSystemActivity('Menu', `Deleted a menu item (ID: ${req.body.id})`);
         return res.json({ success: true });
     });
 });
@@ -423,6 +442,7 @@ app.get('/admin_fetch_users', (req, res) => {
     res.json({ success: true, users: results });
   });
 });
+
 app.get('/admin_fetch_activity_logs', (req, res) => {
   const sql = `
     SELECT 'Booking' as type, created_at as date, CONCAT('New booking created for ', event_type) as description FROM appointments
@@ -430,10 +450,12 @@ app.get('/admin_fetch_activity_logs', (req, res) => {
     SELECT 'Payment' as type, transaction_date as date, CONCAT('Payment of ₱', amount_paid, ' received via ', payment_type) as description FROM payments
     UNION ALL
     SELECT 'User' as type, created_at as date, CONCAT('New user registered: ', username) as description FROM users
+    UNION ALL
+    SELECT type, date, description FROM activity_logs
     ORDER BY date DESC LIMIT 50
   `;
   db.query(sql, (err, results) => {
-    if (err) return res.status(500).json({ success: false, message: "Database error" });
+    if (err) return res.status(500).json({ success: false, message: "Database error fetching activity logs" });
     res.json({ success: true, logs: results });
   });
 });
