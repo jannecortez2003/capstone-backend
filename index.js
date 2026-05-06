@@ -248,9 +248,19 @@ app.post('/admin_update_booking_status', async (req, res) => {
 
   try {
     const pDb = db.promise();
-    const [rows] = await pDb.query("SELECT user_id, required_inventory, status, event_type FROM appointments WHERE id = ?", [bookingId]);
+    
+    // 1. Fetch booking + user details for notifications, auto-deduction, AND detailed activity logging
+    const [rows] = await pDb.query(`
+        SELECT a.user_id, a.required_inventory, a.status, a.event_type, a.event_date, u.full_name 
+        FROM appointments a 
+        LEFT JOIN users u ON a.user_id = u.id 
+        WHERE a.id = ?
+    `, [bookingId]);
+    
+    if (rows.length === 0) return res.status(404).json({ success: false, message: "Booking not found" });
     const booking = rows[0];
     
+    // 2. Auto-Deduction and Status Update Logic
     if (status === 'Confirmed' && booking.status !== 'Confirmed') {
       if (booking.required_inventory) {
         const items = booking.required_inventory.split('; '); 
@@ -268,11 +278,24 @@ app.post('/admin_update_booking_status', async (req, res) => {
       await pDb.query("UPDATE appointments SET status = ? WHERE id = ?", [status, bookingId]);
     }
 
-    // Send Notification to User
+    // 3. Send Notification to User
     await createNotification(booking.user_id, `Your ${booking.event_type} event booking status is now: ${status}.`);
+
+    // 4. DETAILED ACTIVITY LOG (e.g., "Updated booking to 'Confirmed' for John Doe (Wedding on Oct 15, 2026)")
+    const clientName = booking.full_name || 'Unknown Client';
+    const dateObj = new Date(booking.event_date);
+    const formattedDate = !booking.event_date || isNaN(dateObj.getTime()) 
+        ? 'Unknown Date' 
+        : dateObj.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
+    
+    const logMessage = `Updated booking to "${status}" for ${clientName} (${booking.event_type} on ${formattedDate})`;
+    await pDb.query('INSERT INTO activity_logs (action) VALUES (?)', [logMessage]);
+
+    // 5. Send Success Response
     res.json({ success: true, message: `Booking #${bookingId} status successfully updated to ${status}.` });
+    
   } catch (err) {
-    console.error(err);
+    console.error("Error updating booking status:", err);
     res.status(500).json({ success: false, message: "Error updating status." });
   }
 });
@@ -344,12 +367,25 @@ app.post('/admin_update_inventory', (req, res) => {
         return res.json({ success: true });
     });
 });
-app.post('/admin_delete_inventory', (req, res) => {
-    db.query("DELETE FROM inventory WHERE id = ?", [req.body.id], async (err) => {
-        if (err) return res.status(500).json({ success: false, message: "Database error" });
-        await logSystemActivity('Inventory', `Deleted inventory item ID: ${req.body.id}`);
-        return res.json({ success: true });
-    });
+app.post('/admin_delete_inventory', async (req, res) => {
+    const { id } = req.body;
+    try {
+        // 1. Fetch item name FIRST before deleting
+        const [item] = await db.promise().query('SELECT name FROM inventory WHERE id = ?', [id]);
+        const itemName = item.length > 0 ? item[0].name : `Item ID ${id}`;
+
+        // 2. Delete the item
+        await db.promise().query('DELETE FROM inventory WHERE id = ?', [id]);
+
+        // 3. Log the descriptive action
+        const logMessage = `Deleted inventory item: ${itemName}`;
+        await db.promise().query('INSERT INTO activity_logs (action) VALUES (?)', [logMessage]);
+
+        res.json({ success: true, message: 'Inventory item deleted' });
+    } catch (err) {
+        console.error("Error deleting inventory:", err);
+        res.status(500).json({ success: false, message: 'Server error' });
+    }
 });
 
 // --- MENU ---
@@ -379,12 +415,26 @@ app.post('/admin_update_menu', (req, res) => {
         return res.json({ success: true });
     });
 });
-app.post('/admin_delete_menu', (req, res) => {
-    db.query("DELETE FROM menu_items WHERE id = ?", [req.body.id], async (err) => {
-        if (err) return res.status(500).json({ success: false, message: "Database error" });
-        await logSystemActivity('Menu', `Deleted menu item ID: ${req.body.id}`);
-        return res.json({ success: true });
-    });
+
+app.post('/admin_delete_menu', async (req, res) => {
+    const { id } = req.body;
+    try {
+        // 1. Fetch dish name FIRST before deleting
+        const [dish] = await db.promise().query('SELECT name FROM menu_items WHERE id = ?', [id]);
+        const dishName = dish.length > 0 ? dish[0].name : `Dish ID ${id}`;
+
+        // 2. Delete the dish
+        await db.promise().query('DELETE FROM menu_items WHERE id = ?', [id]);
+
+        // 3. Log the descriptive action
+        const logMessage = `Deleted menu item: ${dishName}`;
+        await db.promise().query('INSERT INTO activity_logs (action) VALUES (?)', [logMessage]);
+
+        res.json({ success: true, message: 'Menu item deleted' });
+    } catch (err) {
+        console.error("Error deleting menu:", err);
+        res.status(500).json({ success: false, message: 'Server error' });
+    }
 });
 
 // --- STAFF & PAYMENTS & REPORTS---
