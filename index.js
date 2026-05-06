@@ -212,8 +212,8 @@ app.get('/admin_fetch_dashboard_stats', async (req, res) => {
     const [[menuRow]] = await promiseDb.query("SELECT COUNT(*) as count FROM menu_items");
     const [[userRow]] = await promiseDb.query("SELECT COUNT(*) as count FROM users WHERE is_verified = 1");
     
-    // 🔥 FIXED: Removed the WHERE status IN ('Pending', 'Confirmed') so all tabs work
-    const [events] = await promiseDb.query("SELECT id, event_type, preferred_date, status FROM appointments ORDER BY preferred_date ASC");
+    // 🔥 FIX: Only fetch Pending and Confirmed events for the Dashboard
+    const [events] = await promiseDb.query("SELECT id, event_type, preferred_date, guest_count, status FROM appointments WHERE status IN ('Pending', 'Confirmed') ORDER BY preferred_date ASC");
 
     res.json({
       success: true,
