@@ -207,7 +207,7 @@ app.post('/book_event', (req, res) => {
 app.get('/admin_fetch_dashboard_stats', async (req, res) => {
   try {
     const promiseDb = db.promise();
-    const [[bookingsRow]] = await promiseDb.query("SELECT COUNT(*) as count FROM appointments");
+    const [[bookingsRow]] = await promiseDb.query("SELECT COUNT(*) as count FROM appointments WHERE status IN ('Pending', 'Confirmed')");
     const [[revenueRow]] = await promiseDb.query("SELECT SUM(amount_paid) as total FROM payments");
     const [[menuRow]] = await promiseDb.query("SELECT COUNT(*) as count FROM menu_items");
     const [[userRow]] = await promiseDb.query("SELECT COUNT(*) as count FROM users WHERE is_verified = 1");
