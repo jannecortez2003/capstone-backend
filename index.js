@@ -171,6 +171,24 @@ app.get('/fetch_user_appointments', (req, res) => {
   });
 });
 
+app.get('/fetch_user_payments', (req, res) => {
+  const userId = req.query.user_id; 
+  if (!userId) return res.status(400).json({ success: false, message: "User ID is required." });
+
+  const sql = `
+    SELECT p.id, p.amount_paid, p.payment_type, p.transaction_date, p.remarks, a.event_type 
+    FROM payments p 
+    JOIN appointments a ON p.appointment_id = a.id 
+    WHERE a.user_id = ? 
+    ORDER BY p.transaction_date DESC
+  `;
+  
+  db.query(sql, [userId], (err, results) => {
+    if (err) return res.status(500).json({ success: false, message: "Error fetching payments" });
+    res.json({ success: true, payments: results });
+  });
+});
+
 app.post('/book_event', (req, res) => {
   const { userId, eventType, packageType, preferredDate, guestCount, selectedDishes, notes } = req.body;
   if (!userId || !eventType || !packageType || !preferredDate || !guestCount || !selectedDishes) {
