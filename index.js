@@ -336,11 +336,13 @@ app.post('/admin_reconcile_booking', async (req, res) => {
     if (booking.required_inventory) {
       const items = booking.required_inventory.split('; ');
       for (let itemStr of items) {
-        if (!itemStr || !itemStr.includes(':')) continue; // Prevent crash on badly formatted strings
+        if (!itemStr || !itemStr.includes(':')) continue; 
         
         const [itemName, allocatedQtyStr] = itemStr.split(': ');
-        const allocatedQty = parseInt(allocatedQtyStr) || 0;
-        const damagedQty = damagedItems[itemName] ? parseInt(damagedItems[itemName]) : 0;
+        
+        // 🔥 FIX: Bulletproof number parsing
+        const allocatedQty = parseInt(allocatedQtyStr, 10) || 0;
+        const damagedQty = parseInt(damagedItems[itemName], 10) || 0;
         const returnQty = allocatedQty - damagedQty;
         
         if (returnQty > 0 && itemName) {
@@ -351,6 +353,7 @@ app.post('/admin_reconcile_booking', async (req, res) => {
       }
     }
     
+    // This is where it was likely crashing if "Completed" wasn't allowed in the database
     await pDb.query("UPDATE appointments SET status = 'Completed' WHERE id = ?", [bookingId]);
     
     if (typeof createNotification === 'function') {
@@ -361,7 +364,7 @@ app.post('/admin_reconcile_booking', async (req, res) => {
     res.json({ success: true, message: "Event completed and inventory successfully reconciled!" });
   } catch (err) {
     console.error("Reconciliation Error Detailed:", err);
-    res.status(500).json({ success: false, message: "Server error: " + err.message });
+    res.status(500).json({ success: false, message: "Database error: " + err.message });
   }
 });
 
