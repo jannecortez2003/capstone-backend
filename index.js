@@ -195,7 +195,7 @@ app.post('/book_event', (req, res) => {
     return res.status(400).json({ success: false, message: "All fields are required." });
   }
 
-  const inventoryNeedsPerGuest = { 'Chairs': 1, 'Plate': 1, 'Utensils - Spoon': 1, 'Utensils - Fork': 1 };
+  const inventoryNeedsPerGuest = { 'Chairs': 1, 'Plate': 1, 'Utensils - Spoon': 1, 'Utensils - Fork': 1, 'Glass': 1, 'Table Napkin': 1 };
   const inventoryNeedsRatio = { 'Table (10 seater)': 10 };
   let requiredInventory = [];
 
