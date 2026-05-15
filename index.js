@@ -269,9 +269,9 @@ app.post('/admin_update_booking_status', async (req, res) => {
   try {
     const pDb = db.promise();
     
-    // 1. Fetch details
+    // 1. Fetch details (FIXED: Changed u.full_name to u.username)
     const [rows] = await pDb.query(`
-        SELECT a.user_id, a.required_inventory, a.status, a.event_type, a.preferred_date, u.full_name 
+        SELECT a.user_id, a.required_inventory, a.status, a.event_type, a.preferred_date, u.username 
         FROM appointments a 
         LEFT JOIN users u ON a.user_id = u.id 
         WHERE a.id = ?
@@ -303,8 +303,8 @@ app.post('/admin_update_booking_status', async (req, res) => {
         await createNotification(booking.user_id, `Your ${booking.event_type} event booking status is now: ${status}.`);
     }
 
-    // 4. DETAILED ACTIVITY LOG 
-    const clientName = booking.full_name || 'Unknown Client';
+    // 4. DETAILED ACTIVITY LOG (FIXED: Changed booking.full_name to booking.username)
+    const clientName = booking.username || 'Unknown Client';
     const dateObj = new Date(booking.preferred_date);
     const formattedDate = !booking.preferred_date || isNaN(dateObj.getTime()) 
         ? 'Unknown Date' 
@@ -363,9 +363,9 @@ app.post('/admin_delete_booking', async (req, res) => {
   try {
     const pDb = db.promise();
 
-    // 🚨 1. Fetch the user's name and event date BEFORE deleting
+    // 🚨 1. Fetch the user's name and event date BEFORE deleting (FIXED: Changed u.full_name to u.username)
     const [bookingInfo] = await pDb.query(`
-        SELECT a.event_type, a.preferred_date, u.full_name 
+        SELECT a.event_type, a.preferred_date, u.username 
         FROM appointments a 
         LEFT JOIN users u ON a.user_id = u.id 
         WHERE a.id = ?
@@ -374,8 +374,9 @@ app.post('/admin_delete_booking', async (req, res) => {
     let logMessage = `Deleted booking ID ${id}`;
 
     if (bookingInfo.length > 0) {
-        const { event_type, preferred_date, full_name } = bookingInfo[0];
-        const clientName = full_name || 'Unknown Client';
+        // FIXED: Changed full_name to username
+        const { event_type, preferred_date, username } = bookingInfo[0];
+        const clientName = username || 'Unknown Client';
         const dateObj = new Date(preferred_date);
         const formattedDate = !preferred_date || isNaN(dateObj.getTime()) 
             ? 'Unknown Date' 
