@@ -322,21 +322,29 @@ app.post('/admin_update_booking_status', async (req, res) => {
 });
 
 app.post('/admin_reconcile_booking', async (req, res) => {
-  const { bookingId, damagedItems } = req.body; 
+  // 1. Add default {} to damagedItems to prevent undefined crashes
+  const { bookingId, damagedItems = {} } = req.body; 
+  if (!bookingId) return res.status(400).json({ success: false, message: "Missing booking ID" });
+
   try {
     const pDb = db.promise();
+    
+    // 2. Validate that the booking actually exists in the database
     const [rows] = await pDb.query("SELECT user_id, required_inventory FROM appointments WHERE id = ?", [bookingId]);
+    if (rows.length === 0) return res.status(404).json({ success: false, message: "Booking not found in database." });
+    
     const booking = rows[0];
     
+    // 3. Safer item deduction loop
     if (booking.required_inventory) {
       const items = booking.required_inventory.split('; ');
       for (let itemStr of items) {
         const [itemName, allocatedQtyStr] = itemStr.split(': ');
-        const allocatedQty = parseInt(allocatedQtyStr);
+        const allocatedQty = parseInt(allocatedQtyStr) || 0;
         const damagedQty = damagedItems[itemName] ? parseInt(damagedItems[itemName]) : 0;
         const returnQty = allocatedQty - damagedQty;
         
-        if (returnQty > 0) {
+        if (returnQty > 0 && itemName) {
           await pDb.query("UPDATE inventory SET quantity = quantity + ? WHERE name = ?", [returnQty, itemName]);
           await pDb.query("INSERT INTO inventory_logs (item_name, quantity_change, action_type, remarks) VALUES (?, ?, ?, ?)", [itemName, returnQty, 'Reconciliation Return', `Returned from Booking #${bookingId}`]);
         }
@@ -344,14 +352,17 @@ app.post('/admin_reconcile_booking', async (req, res) => {
     }
     
     await pDb.query("UPDATE appointments SET status = 'Completed' WHERE id = ?", [bookingId]);
-    await createNotification(booking.user_id, `Your booking #${bookingId} has been successfully completed. Thank you!`);
     
+    if (typeof createNotification === 'function') {
+        await createNotification(booking.user_id, `Your booking #${bookingId} has been successfully completed. Thank you!`);
+    }
     await logSystemActivity('Booking', `Reconciled and Completed Booking #${bookingId}`);
     
     res.json({ success: true, message: "Event completed and inventory successfully reconciled!" });
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ success: false, message: "Error reconciling inventory." });
+    console.error("Reconciliation Error:", err);
+    // 4. Send exact error back to the frontend
+    res.status(500).json({ success: false, message: "Database error: " + err.message });
   }
 });
 
