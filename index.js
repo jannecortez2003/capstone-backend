@@ -197,7 +197,6 @@ app.post('/admin_update_booking_status', async (req, res) => {
     if (rows.length === 0) return res.status(404).json({ success: false, message: "Booking not found" });
     const booking = rows[0];
     
-    // Prevent double confirmation logs
     if (status === 'Confirmed' && booking.status !== 'Confirmed') {
       if (booking.required_inventory) {
         const items = booking.required_inventory.split('; '); 
@@ -240,7 +239,6 @@ app.post('/admin_reconcile_booking', async (req, res) => {
     
     const booking = rows[0];
 
-    // 🔥 FIX: Prevent double reconciliation completely
     if (booking.status === 'Completed') {
         return res.status(400).json({ success: false, message: "This booking has already been reconciled and completed." });
     }
@@ -387,16 +385,92 @@ app.get('/admin_fetch_activity_logs', (req, res) => {
   const sql = `SELECT 'Booking' as type, created_at as date, CONCAT('New booking created for ', event_type) as description FROM appointments UNION ALL SELECT 'Payment' as type, transaction_date as date, CONCAT('Payment of ₱', amount_paid, ' received via ', payment_type) as description FROM payments UNION ALL SELECT 'User' as type, created_at as date, CONCAT('New user registered: ', username) as description FROM users UNION ALL SELECT type, date, description FROM activity_logs ORDER BY date DESC LIMIT 50`;
   db.query(sql, (err, results) => { res.json({ success: true, logs: results }); });
 });
+
+
+// =========================================================================
+// 🚀 NEW: ADMINISTRATIVE REPORT GENERATION FUNCTION (Upgraded)
+// =========================================================================
 app.get('/admin_fetch_reports', async (req, res) => {
   try {
     const pDb = db.promise();
+    
+    // 1. Get Revenue & Bookings
     const [[rev]] = await pDb.query("SELECT SUM(amount_paid) as r FROM payments");
     const [[bk]] = await pDb.query("SELECT COUNT(*) as c FROM appointments");
+    
+    // 2. Get Package Popularity
     const [pkgs] = await pDb.query("SELECT package_type, COUNT(*) as count FROM appointments GROUP BY package_type");
+    
+    // 3. Get Low Stock Inventory (Items with 20 or fewer remaining)
+    const [lowStock] = await pDb.query("SELECT name, quantity, unit FROM inventory WHERE quantity <= 20 ORDER BY quantity ASC");
+
     const revenue = rev.r || 0;
-    res.json({ success: true, summary: { revenue, expenses: revenue * 0.4, profit: revenue * 0.6, total_bookings: bk.c || 0 }, packages: pkgs });
-  } catch (e) { res.status(500).json({ success: false }); }
+    
+    res.json({ 
+      success: true, 
+      summary: { 
+        revenue: revenue, 
+        expenses: revenue * 0.4, 
+        profit: revenue * 0.6, 
+        total_bookings: bk.c || 0 
+      }, 
+      packages: pkgs,
+      lowStock: lowStock // Added for inventory reporting!
+    });
+  } catch (e) { 
+    res.status(500).json({ success: false, message: "Error generating reports" }); 
+  }
 });
+
+
+// =========================================================================
+// 🚀 NEW: PACKAGE MANAGEMENT (System Settings Function)
+// =========================================================================
+app.get('/fetch_packages', (req, res) => { 
+  db.query("SELECT * FROM packages ORDER BY price ASC", (err, results) => { 
+    if (err) return res.status(500).json({ success: false, message: "Database error" });
+    res.json({ success: true, packages: results }); 
+  }); 
+});
+
+app.post('/admin_add_package', (req, res) => {
+    const { name, description, price, pax_capacity } = req.body;
+    db.query("INSERT INTO packages (package_name, description, price, pax_capacity) VALUES (?, ?, ?, ?)", 
+    [name, description, price, pax_capacity], async (err) => {
+        if (err) return res.status(500).json({ success: false, message: err.message });
+        await logSystemActivity('Settings', `Added new catering package: ${name}`);
+        res.json({ success: true, message: "Package added successfully!" });
+    });
+});
+
+app.post('/admin_update_package', (req, res) => {
+    const { id, name, description, price, pax_capacity } = req.body;
+    db.query("UPDATE packages SET package_name=?, description=?, price=?, pax_capacity=? WHERE id=?", 
+    [name, description, price, pax_capacity, id], async (err) => {
+        if (err) return res.status(500).json({ success: false, message: err.message });
+        await logSystemActivity('Settings', `Updated catering package: ${name}`);
+        res.json({ success: true, message: "Package updated successfully!" });
+    });
+});
+
+app.post('/admin_delete_package', async (req, res) => {
+  const id = req.body.id || req.params.id;
+  try {
+    const pDb = db.promise();
+    const [pkg] = await pDb.query('SELECT package_name FROM packages WHERE id = ?', [id]);
+    const pkgName = pkg.length > 0 ? pkg[0].package_name : `Package ID ${id}`;
+    
+    await pDb.query('DELETE FROM packages WHERE id = ?', [id]);
+    await logSystemActivity('Settings', `Deleted catering package: ${pkgName}`);
+    
+    res.json({ success: true, message: 'Package deleted safely' });
+  } catch (err) { 
+    res.status(500).json({ success: false, message: 'Server error' }); 
+  }
+});
+// =========================================================================
+
+
 app.get('/admin_fetch_verification', (req, res) => { db.query("SELECT * FROM verification_requests WHERE status = 'Pending'", (err, r) => { res.json({ success: true, requests: r }); }); });
 app.post('/admin_verify_user', (req, res) => {
   const { requestId, status } = req.body;
