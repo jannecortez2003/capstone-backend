@@ -424,6 +424,8 @@ app.get('/admin_fetch_reports', async (req, res) => {
 
 // --- PACKAGE MANAGEMENT ROUTES ---
 
+// --- PACKAGE MANAGEMENT ROUTES ---
+
 // Fetch all packages
 app.get('/fetch_packages', (req, res) => {
     const sql = "SELECT * FROM packages";
@@ -438,10 +440,10 @@ app.get('/fetch_packages', (req, res) => {
 
 // Add a new package
 app.post('/admin_add_package', (req, res) => {
-    const { package_name, description, price, pax_capacity, dishes } = req.body;
-    const sql = "INSERT INTO packages (package_name, description, price, pax_capacity, dishes) VALUES (?, ?, ?, ?, ?)";
+    const { package_name, description, price, pax_capacity, dish_limit } = req.body;
+    const sql = "INSERT INTO packages (package_name, description, price, pax_capacity, dish_limit) VALUES (?, ?, ?, ?, ?)";
     
-    db.query(sql, [package_name, description, price, pax_capacity, dishes], (err, result) => {
+    db.query(sql, [package_name, description, price, pax_capacity, dish_limit], (err, result) => {
         if (err) {
             console.error("Error adding package:", err);
             return res.status(500).json({ success: false, message: "Database error", error: err });
@@ -452,10 +454,10 @@ app.post('/admin_add_package', (req, res) => {
 
 // Update an existing package
 app.post('/admin_update_package', (req, res) => {
-    const { id, package_name, description, price, pax_capacity, dishes } = req.body;
-    const sql = "UPDATE packages SET package_name=?, description=?, price=?, pax_capacity=?, dishes=? WHERE id=?";
+    const { id, package_name, description, price, pax_capacity, dish_limit } = req.body;
+    const sql = "UPDATE packages SET package_name=?, description=?, price=?, pax_capacity=?, dish_limit=? WHERE id=?";
     
-    db.query(sql, [package_name, description, price, pax_capacity, dishes, id], (err, result) => {
+    db.query(sql, [package_name, description, price, pax_capacity, dish_limit, id], (err, result) => {
         if (err) {
             console.error("Error updating package:", err);
             return res.status(500).json({ success: false, message: "Database error", error: err });
