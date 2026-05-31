@@ -422,51 +422,60 @@ app.get('/admin_fetch_reports', async (req, res) => {
   }
 });
 
+// --- PACKAGE MANAGEMENT ROUTES ---
 
-// =========================================================================
-// 🚀 NEW: PACKAGE MANAGEMENT (System Settings Function)
-// =========================================================================
-app.get('/fetch_packages', (req, res) => { 
-  db.query("SELECT * FROM packages ORDER BY price ASC", (err, results) => { 
-    if (err) return res.status(500).json({ success: false, message: "Database error" });
-    res.json({ success: true, packages: results }); 
-  }); 
+// Fetch all packages
+app.get('/fetch_packages', (req, res) => {
+    const sql = "SELECT * FROM packages";
+    db.query(sql, (err, results) => {
+        if (err) {
+            console.error("Error fetching packages:", err);
+            return res.status(500).json({ success: false, message: "Database error" });
+        }
+        res.json({ success: true, packages: results });
+    });
 });
 
+// Add a new package
 app.post('/admin_add_package', (req, res) => {
-    const { name, description, price, pax_capacity } = req.body;
-    db.query("INSERT INTO packages (package_name, description, price, pax_capacity) VALUES (?, ?, ?, ?)", 
-    [name, description, price, pax_capacity], async (err) => {
-        if (err) return res.status(500).json({ success: false, message: err.message });
-        await logSystemActivity('Settings', `Added new catering package: ${name}`);
-        res.json({ success: true, message: "Package added successfully!" });
+    const { package_name, description, price, pax_capacity, dishes } = req.body;
+    const sql = "INSERT INTO packages (package_name, description, price, pax_capacity, dishes) VALUES (?, ?, ?, ?, ?)";
+    
+    db.query(sql, [package_name, description, price, pax_capacity, dishes], (err, result) => {
+        if (err) {
+            console.error("Error adding package:", err);
+            return res.status(500).json({ success: false, message: "Database error", error: err });
+        }
+        res.json({ success: true, message: "Package added successfully" });
     });
 });
 
+// Update an existing package
 app.post('/admin_update_package', (req, res) => {
-    const { id, name, description, price, pax_capacity } = req.body;
-    db.query("UPDATE packages SET package_name=?, description=?, price=?, pax_capacity=? WHERE id=?", 
-    [name, description, price, pax_capacity, id], async (err) => {
-        if (err) return res.status(500).json({ success: false, message: err.message });
-        await logSystemActivity('Settings', `Updated catering package: ${name}`);
-        res.json({ success: true, message: "Package updated successfully!" });
+    const { id, package_name, description, price, pax_capacity, dishes } = req.body;
+    const sql = "UPDATE packages SET package_name=?, description=?, price=?, pax_capacity=?, dishes=? WHERE id=?";
+    
+    db.query(sql, [package_name, description, price, pax_capacity, dishes, id], (err, result) => {
+        if (err) {
+            console.error("Error updating package:", err);
+            return res.status(500).json({ success: false, message: "Database error", error: err });
+        }
+        res.json({ success: true, message: "Package updated successfully" });
     });
 });
 
-app.post('/admin_delete_package', async (req, res) => {
-  const id = req.body.id || req.params.id;
-  try {
-    const pDb = db.promise();
-    const [pkg] = await pDb.query('SELECT package_name FROM packages WHERE id = ?', [id]);
-    const pkgName = pkg.length > 0 ? pkg[0].package_name : `Package ID ${id}`;
+// Delete a package
+app.post('/admin_delete_package', (req, res) => {
+    const { id } = req.body;
+    const sql = "DELETE FROM packages WHERE id=?";
     
-    await pDb.query('DELETE FROM packages WHERE id = ?', [id]);
-    await logSystemActivity('Settings', `Deleted catering package: ${pkgName}`);
-    
-    res.json({ success: true, message: 'Package deleted safely' });
-  } catch (err) { 
-    res.status(500).json({ success: false, message: 'Server error' }); 
-  }
+    db.query(sql, [id], (err, result) => {
+        if (err) {
+            console.error("Error deleting package:", err);
+            return res.status(500).json({ success: false, message: "Database error" });
+        }
+        res.json({ success: true, message: "Package deleted successfully" });
+    });
 });
 // =========================================================================
 
