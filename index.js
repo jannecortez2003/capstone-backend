@@ -90,9 +90,6 @@ app.post('/adminlogin', (req, res) => {
   });
 });
 
-// ==========================================
-// USER VERIFICATION SUBMISSION ROUTE
-// ==========================================
 app.post('/verify', upload.single('idImage'), async (req, res) => {
   try {
     const { userId, idType, idNumber, lastName, firstName, address, phone, email } = req.body;
@@ -124,18 +121,7 @@ app.post('/verify', upload.single('idImage'), async (req, res) => {
       status = 'Pending'
     `;
 
-    await pDb.query(sql, [
-      userId, 
-      idType, 
-      idNumber, 
-      lastName, 
-      firstName, 
-      address, 
-      phone || '', 
-      email || '', 
-      idImagePath
-    ]);
-    
+    await pDb.query(sql, [userId, idType, idNumber, lastName, firstName, address, phone || '', email || '', idImagePath]);
     await logSystemActivity('User', `Verification request submitted by ${firstName} ${lastName}`);
 
     res.json({ success: true, message: "Verification request submitted successfully!" });
@@ -175,10 +161,17 @@ app.get('/fetch_booked_dates', (req, res) => {
   });
 });
 
+// 🔥 UPDATED: Includes selected_dishes and joins packages for description (inclusions)
 app.get('/fetch_user_appointments', (req, res) => {
   const userId = req.query.user_id; 
   if (!userId) return res.status(400).json({ success: false, message: "User ID is required." });
-  const sql = "SELECT id, event_type, package_type, preferred_date, guest_count, status, total_cost FROM appointments WHERE user_id = ? ORDER BY created_at DESC";
+  const sql = `
+    SELECT a.id, a.event_type, a.package_type, a.preferred_date, a.guest_count, a.status, a.total_cost, a.selected_dishes, p.description as inclusions 
+    FROM appointments a 
+    LEFT JOIN packages p ON a.package_type = p.package_name
+    WHERE a.user_id = ? 
+    ORDER BY a.created_at DESC
+  `;
   db.query(sql, [userId], (err, results) => {
     if (err) return res.status(500).json({ success: false, message: "Error fetching appointments" });
     res.json({ success: true, appointments: results });
@@ -349,7 +342,6 @@ app.post('/admin_delete_booking', async (req, res) => {
   }
 });
 
-// --- INVENTORY, MENU, STAFF ROUTES ---
 app.get('/admin_fetch_inventory', (req, res) => { db.query("SELECT * FROM inventory", (err, r) => { res.json({ success: true, inventory: r }); }); });
 app.get('/admin_fetch_inventory_logs', (req, res) => { db.query("SELECT * FROM inventory_logs ORDER BY created_at DESC", (err, results) => { res.json({ success: true, logs: results }); }); });
 app.post('/admin_add_inventory', (req, res) => {
@@ -467,7 +459,6 @@ app.get('/admin_fetch_reports', async (req, res) => {
   }
 });
 
-// --- PACKAGE MANAGEMENT ROUTES ---
 app.get('/fetch_packages', (req, res) => {
     const sql = "SELECT * FROM packages";
     db.query(sql, (err, results) => {
