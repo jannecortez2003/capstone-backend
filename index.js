@@ -34,6 +34,16 @@ const db = mysql.createPool({
   ssl: { rejectUnauthorized: true }
 });
 
+// MULTI-DAY BOOKING UPGRADE: Automatically alter the table if the column doesn't exist
+db.query("SHOW COLUMNS FROM appointments LIKE 'end_date'", (err, results) => {
+    if (!err && results.length === 0) {
+        db.query("ALTER TABLE appointments ADD COLUMN end_date DATE NULL AFTER preferred_date", (err) => {
+            if (err) console.error("Failed to add end_date column:", err);
+            else console.log("Successfully added end_date column for multi-day bookings.");
+        });
+    }
+});
+
 app.get('/', (req, res) => { res.send('Node.js Backend is running perfectly!'); });
 
 async function logSystemActivity(type, description) {
@@ -155,18 +165,35 @@ app.post('/notify_chat_message', (req, res) => {
 });
 
 app.get('/fetch_booked_dates', (req, res) => {
-  db.query("SELECT preferred_date FROM appointments WHERE status != 'Cancelled'", (err, results) => {
+  db.query("SELECT preferred_date, end_date FROM appointments WHERE status != 'Cancelled'", (err, results) => {
     if (err) return res.status(500).json({ success: false, message: "Database error" });
-    res.json({ success: true, bookedDates: results.map(row => row.preferred_date) });
+    
+    let allBookedDates = [];
+    results.forEach(row => {
+        let curr = new Date(row.preferred_date);
+        let end = row.end_date ? new Date(row.end_date) : new Date(row.preferred_date);
+        
+        curr.setHours(0,0,0,0);
+        end.setHours(0,0,0,0);
+        
+        while (curr <= end) {
+            const y = curr.getFullYear();
+            const m = String(curr.getMonth() + 1).padStart(2, '0');
+            const d = String(curr.getDate()).padStart(2, '0');
+            allBookedDates.push(`${y}-${m}-${d}`);
+            curr.setDate(curr.getDate() + 1);
+        }
+    });
+
+    res.json({ success: true, bookedDates: allBookedDates });
   });
 });
 
-// 🔥 UPDATED: Includes selected_dishes and joins packages for description (inclusions)
 app.get('/fetch_user_appointments', (req, res) => {
   const userId = req.query.user_id; 
   if (!userId) return res.status(400).json({ success: false, message: "User ID is required." });
   const sql = `
-    SELECT a.id, a.event_type, a.package_type, a.preferred_date, a.guest_count, a.status, a.total_cost, a.selected_dishes, p.description as inclusions 
+    SELECT a.id, a.event_type, a.package_type, a.preferred_date, a.end_date, a.guest_count, a.status, a.total_cost, a.selected_dishes, p.description as inclusions 
     FROM appointments a 
     LEFT JOIN packages p ON a.package_type = p.package_name
     WHERE a.user_id = ? 
@@ -189,10 +216,19 @@ app.get('/fetch_user_payments', (req, res) => {
 });
 
 app.post('/book_event', (req, res) => {
-  const { userId, eventType, packageType, preferredDate, guestCount, selectedDishes, notes } = req.body;
+  const { userId, eventType, packageType, preferredDate, duration, guestCount, selectedDishes, notes } = req.body;
   if (!userId || !eventType || !packageType || !preferredDate || !guestCount || !selectedDishes) {
     return res.status(400).json({ success: false, message: "All fields are required." });
   }
+
+  // Multi-day calculation
+  let endDate = preferredDate;
+  if (duration > 1) {
+      const d = new Date(preferredDate);
+      d.setDate(d.getDate() + (Number(duration) - 1));
+      endDate = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  }
+
   const inventoryNeedsPerGuest = { 'Chairs': 1, 'Plate': 1, 'Utensils - Spoon': 1, 'Utensils - Fork': 1, 'Glass': 1, 'Table Napkin': 1 };
   const inventoryNeedsRatio = { 'Table (10 seater)': 10 };
   let requiredInventory = [];
@@ -206,10 +242,11 @@ app.post('/book_event', (req, res) => {
   }
   requiredInventory.push('Lights (assorted): 1');
   const requiredInventoryStr = requiredInventory.join('; ');
-  const sql = `INSERT INTO appointments (user_id, event_type, package_type, preferred_date, guest_count, selected_dishes, required_inventory, status) VALUES (?, ?, ?, ?, ?, ?, ?, 'Pending')`;
-  db.query(sql, [userId, eventType, packageType, preferredDate, guestCount, selectedDishes, requiredInventoryStr], (err, result) => {
+
+  const sql = `INSERT INTO appointments (user_id, event_type, package_type, preferred_date, end_date, guest_count, selected_dishes, required_inventory, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Pending')`;
+  db.query(sql, [userId, eventType, packageType, preferredDate, endDate, guestCount, selectedDishes, requiredInventoryStr], (err, result) => {
     if (err) return res.status(500).json({ success: false, message: "Database error: " + err.message });
-    createNotification(userId, `Your booking for ${eventType} on ${preferredDate} has been received and is pending review.`);
+    createNotification(userId, `Your booking for ${eventType} starting on ${preferredDate} has been received and is pending review.`);
     res.json({ success: true, message: "Event booking successful. We will contact you shortly!", booking_id: result.insertId });
   });
 });
@@ -221,7 +258,7 @@ app.get('/admin_fetch_dashboard_stats', async (req, res) => {
     const [[revenueRow]] = await promiseDb.query("SELECT SUM(amount_paid) as total FROM payments");
     const [[menuRow]] = await promiseDb.query("SELECT COUNT(*) as count FROM menu_items");
     const [[userRow]] = await promiseDb.query("SELECT COUNT(*) as count FROM users WHERE is_verified = 1");
-    const [events] = await promiseDb.query("SELECT id, event_type, preferred_date, guest_count, status FROM appointments WHERE status IN ('Pending', 'Confirmed') ORDER BY preferred_date ASC");
+    const [events] = await promiseDb.query("SELECT id, event_type, preferred_date, end_date, guest_count, status FROM appointments WHERE status IN ('Pending', 'Confirmed') ORDER BY preferred_date ASC");
     res.json({ success: true, stats: { bookings: bookingsRow?.count || 0, revenue: revenueRow?.total || 0, menuItems: menuRow?.count || 0, customers: userRow?.count || 0 }, upcomingEvents: events });
   } catch (err) { res.status(500).json({ success: false, message: "Database error fetching stats" }); }
 });
@@ -342,6 +379,7 @@ app.post('/admin_delete_booking', async (req, res) => {
   }
 });
 
+// --- INVENTORY, MENU, STAFF ROUTES ---
 app.get('/admin_fetch_inventory', (req, res) => { db.query("SELECT * FROM inventory", (err, r) => { res.json({ success: true, inventory: r }); }); });
 app.get('/admin_fetch_inventory_logs', (req, res) => { db.query("SELECT * FROM inventory_logs ORDER BY created_at DESC", (err, results) => { res.json({ success: true, logs: results }); }); });
 app.post('/admin_add_inventory', (req, res) => {
