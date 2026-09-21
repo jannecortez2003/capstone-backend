@@ -90,6 +90,61 @@ app.post('/adminlogin', (req, res) => {
   });
 });
 
+// ==========================================
+// USER VERIFICATION SUBMISSION ROUTE
+// ==========================================
+app.post('/verify', upload.single('idImage'), async (req, res) => {
+  try {
+    const { userId, idType, idNumber, lastName, firstName, address, phone, email } = req.body;
+    
+    if (!userId) {
+      return res.status(400).json({ success: false, message: "User ID is missing." });
+    }
+
+    const idImagePath = req.file ? req.file.path : null;
+    if (!idImagePath) {
+      return res.status(400).json({ success: false, message: "ID image is required for upload." });
+    }
+
+    const pDb = db.promise();
+    
+    const sql = `
+      INSERT INTO verification_requests 
+      (user_id, id_type, id_number, last_name, first_name, address, phone, email, id_image_path, status) 
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'Pending')
+      ON DUPLICATE KEY UPDATE 
+      id_type = VALUES(id_type),
+      id_number = VALUES(id_number),
+      last_name = VALUES(last_name),
+      first_name = VALUES(first_name),
+      address = VALUES(address),
+      phone = VALUES(phone),
+      email = VALUES(email),
+      id_image_path = VALUES(id_image_path),
+      status = 'Pending'
+    `;
+
+    await pDb.query(sql, [
+      userId, 
+      idType, 
+      idNumber, 
+      lastName, 
+      firstName, 
+      address, 
+      phone || '', 
+      email || '', 
+      idImagePath
+    ]);
+    
+    await logSystemActivity('User', `Verification request submitted by ${firstName} ${lastName}`);
+
+    res.json({ success: true, message: "Verification request submitted successfully!" });
+  } catch (error) {
+    console.error("Verification Submission Error:", error);
+    res.status(500).json({ success: false, message: "Database error processing verification: " + error.message });
+  }
+});
+
 app.get('/fetch_notifications', (req, res) => {
   const { userId } = req.query;
   if (!userId) return res.status(400).json({ success: false, message: "User ID required" });
@@ -361,9 +416,9 @@ app.post('/admin_delete_staff', async (req, res) => {
     try {
         const pDb = db.promise();
         const [staff] = await pDb.query('SELECT name FROM staff WHERE id = ?', [id]);
+        res.json({ success: true });
         await pDb.query("DELETE FROM staff WHERE id = ?", [id]);
         await logSystemActivity('Staff', `Deleted staff member: ${staff.length > 0 ? staff[0].name : `Staff ID ${id}`}`);
-        res.json({ success: true });
     } catch (err) { res.status(500).json({ success: false }); }
 });
 
@@ -386,22 +441,12 @@ app.get('/admin_fetch_activity_logs', (req, res) => {
   db.query(sql, (err, results) => { res.json({ success: true, logs: results }); });
 });
 
-
-// =========================================================================
-// 🚀 NEW: ADMINISTRATIVE REPORT GENERATION FUNCTION (Upgraded)
-// =========================================================================
 app.get('/admin_fetch_reports', async (req, res) => {
   try {
     const pDb = db.promise();
-    
-    // 1. Get Revenue & Bookings
     const [[rev]] = await pDb.query("SELECT SUM(amount_paid) as r FROM payments");
     const [[bk]] = await pDb.query("SELECT COUNT(*) as c FROM appointments");
-    
-    // 2. Get Package Popularity
     const [pkgs] = await pDb.query("SELECT package_type, COUNT(*) as count FROM appointments GROUP BY package_type");
-    
-    // 3. Get Low Stock Inventory (Items with 20 or fewer remaining)
     const [lowStock] = await pDb.query("SELECT name, quantity, unit FROM inventory WHERE quantity <= 20 ORDER BY quantity ASC");
 
     const revenue = rev.r || 0;
@@ -415,7 +460,7 @@ app.get('/admin_fetch_reports', async (req, res) => {
         total_bookings: bk.c || 0 
       }, 
       packages: pkgs,
-      lowStock: lowStock // Added for inventory reporting!
+      lowStock: lowStock
     });
   } catch (e) { 
     res.status(500).json({ success: false, message: "Error generating reports" }); 
@@ -423,10 +468,6 @@ app.get('/admin_fetch_reports', async (req, res) => {
 });
 
 // --- PACKAGE MANAGEMENT ROUTES ---
-
-// --- PACKAGE MANAGEMENT ROUTES ---
-
-// Fetch all packages
 app.get('/fetch_packages', (req, res) => {
     const sql = "SELECT * FROM packages";
     db.query(sql, (err, results) => {
@@ -438,7 +479,6 @@ app.get('/fetch_packages', (req, res) => {
     });
 });
 
-// Add a new package
 app.post('/admin_add_package', (req, res) => {
     const { package_name, description, price, pax_capacity, dish_limit } = req.body;
     const sql = "INSERT INTO packages (package_name, description, price, pax_capacity, dish_limit) VALUES (?, ?, ?, ?, ?)";
@@ -452,7 +492,6 @@ app.post('/admin_add_package', (req, res) => {
     });
 });
 
-// Update an existing package
 app.post('/admin_update_package', (req, res) => {
     const { id, package_name, description, price, pax_capacity, dish_limit } = req.body;
     const sql = "UPDATE packages SET package_name=?, description=?, price=?, pax_capacity=?, dish_limit=? WHERE id=?";
@@ -466,7 +505,6 @@ app.post('/admin_update_package', (req, res) => {
     });
 });
 
-// Delete a package
 app.post('/admin_delete_package', (req, res) => {
     const { id } = req.body;
     const sql = "DELETE FROM packages WHERE id=?";
@@ -479,8 +517,6 @@ app.post('/admin_delete_package', (req, res) => {
         res.json({ success: true, message: "Package deleted successfully" });
     });
 });
-// =========================================================================
-
 
 app.get('/admin_fetch_verification', (req, res) => { db.query("SELECT * FROM verification_requests WHERE status = 'Pending'", (err, r) => { res.json({ success: true, requests: r }); }); });
 app.post('/admin_verify_user', (req, res) => {
