@@ -474,26 +474,69 @@ app.get('/admin_fetch_activity_logs', (req, res) => {
 app.get('/admin_fetch_reports', async (req, res) => {
   try {
     const pDb = db.promise();
-    const [[rev]] = await pDb.query("SELECT SUM(amount_paid) as r FROM payments");
-    const [[bk]] = await pDb.query("SELECT COUNT(*) as c FROM appointments");
-    const [pkgs] = await pDb.query("SELECT package_type, COUNT(*) as count FROM appointments GROUP BY package_type");
-    const [lowStock] = await pDb.query("SELECT name, quantity, unit FROM inventory WHERE quantity <= 20 ORDER BY quantity ASC");
-
-    const revenue = rev.r || 0;
     
+    // 1. Financial & Operational Summary
+    const [[rev]] = await pDb.query("SELECT COALESCE(SUM(amount_paid), 0) as total_rev FROM payments");
+    const [[bookings]] = await pDb.query(`
+      SELECT 
+        COUNT(*) as total_events,
+        COALESCE(SUM(guest_count), 0) as total_guests_served,
+        SUM(CASE WHEN status = 'Completed' THEN 1 ELSE 0 END) as completed_events,
+        SUM(CASE WHEN status = 'Confirmed' THEN 1 ELSE 0 END) as upcoming_events,
+        SUM(CASE WHEN status = 'Pending' THEN 1 ELSE 0 END) as pending_events
+      FROM appointments
+    `);
+    
+    // 2. Events breakdown by Catering Occasion / Type (Weddings, Birthdays, etc.)
+    const [eventsByType] = await pDb.query(`
+      SELECT event_type, COUNT(*) as count, COALESCE(SUM(guest_count), 0) as total_guests
+      FROM appointments 
+      GROUP BY event_type
+      ORDER BY count DESC
+    `);
+
+    // 3. Catering Inventory Stock Status (Equipment & Tableware)
+    const [inventoryAlerts] = await pDb.query(`
+      SELECT name, quantity, unit 
+      FROM inventory 
+      WHERE quantity <= 20 
+      ORDER BY quantity ASC
+    `);
+
+    // 4. Recent Catering Order Log
+    const [recentCateringOrders] = await pDb.query(`
+      SELECT 
+        a.id, 
+        a.event_type, 
+        a.preferred_date, 
+        a.end_date,
+        a.guest_count, 
+        a.status, 
+        a.total_cost,
+        u.username as client_name
+      FROM appointments a
+      LEFT JOIN users u ON a.user_id = u.id
+      ORDER BY a.preferred_date DESC
+      LIMIT 6
+    `);
+
     res.json({ 
       success: true, 
       summary: { 
-        revenue: revenue, 
-        expenses: revenue * 0.4, 
-        profit: revenue * 0.6, 
-        total_bookings: bk.c || 0 
+        revenue: rev.total_rev || 0,
+        total_events: bookings.total_events || 0,
+        total_guests_served: bookings.total_guests_served || 0,
+        completed_events: bookings.completed_events || 0,
+        upcoming_events: bookings.upcoming_events || 0,
+        pending_events: bookings.pending_events || 0
       }, 
-      packages: pkgs,
-      lowStock: lowStock
+      eventsByType,
+      inventoryAlerts,
+      recentCateringOrders
     });
   } catch (e) { 
-    res.status(500).json({ success: false, message: "Error generating reports" }); 
+    console.error("Error generating catering reports:", e);
+    res.status(500).json({ success: false, message: "Error generating reports: " + e.message }); 
   }
 });
 
