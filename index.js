@@ -73,7 +73,8 @@ db.query("SHOW COLUMNS FROM admins LIKE 'role'", (err, results) => {
 // GOOGLE AUTH UPGRADE
 db.query("SHOW COLUMNS FROM users LIKE 'google_id'", (err, results) => {
     if (!err && results.length === 0) {
-        db.query("ALTER TABLE users ADD COLUMN google_id VARCHAR(255) NULL UNIQUE", (err) => {
+        // Removed the word UNIQUE from the end of the query below
+        db.query("ALTER TABLE users ADD COLUMN google_id VARCHAR(255) NULL", (err) => {
             if (err) console.error("Failed to add google_id column:", err);
             else console.log("Successfully added google_id column for Google Login.");
         });
