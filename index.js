@@ -44,12 +44,22 @@ db.query("SHOW COLUMNS FROM appointments LIKE 'end_date'", (err, results) => {
     }
 });
 
-// PAYMENT RECEIPT UPGRADE: Automatically alter the table if the column doesn't exist
+// PAYMENT RECEIPT UPGRADE
 db.query("SHOW COLUMNS FROM payments LIKE 'receipt_url'", (err, results) => {
     if (!err && results.length === 0) {
         db.query("ALTER TABLE payments ADD COLUMN receipt_url VARCHAR(255) NULL", (err) => {
             if (err) console.error("Failed to add receipt_url column:", err);
             else console.log("Successfully added receipt_url column for payments.");
+        });
+    }
+});
+
+// RBAC UPGRADE: Add role column to admins table
+db.query("SHOW COLUMNS FROM admins LIKE 'role'", (err, results) => {
+    if (!err && results.length === 0) {
+        db.query("ALTER TABLE admins ADD COLUMN role ENUM('admin', 'manager', 'staff') NOT NULL DEFAULT 'admin'", (err) => {
+            if (err) console.error("Failed to add role column:", err);
+            else console.log("Successfully added role column for RBAC.");
         });
     }
 });
@@ -105,7 +115,7 @@ app.post('/adminlogin', (req, res) => {
     if (err) return res.status(500).json({ success: false, message: "Database error" });
     if (results.length === 0) return res.status(400).json({ success: false, message: "Admin not found" });
     const admin = results[0];
-    if (password === admin.password) res.json({ success: true, message: "Login successful", admin: { id: admin.id, username: admin.username, role: 'admin' } });
+    if (password === admin.password) res.json({ success: true, message: "Login successful", admin: { id: admin.id, username: admin.username, role: admin.role || 'admin' } });
     else res.status(400).json({ success: false, message: "Invalid password" });
   });
 });
@@ -389,7 +399,6 @@ app.post('/admin_delete_booking', async (req, res) => {
   }
 });
 
-// --- INVENTORY, MENU, STAFF ROUTES ---
 app.get('/admin_fetch_inventory', (req, res) => { db.query("SELECT * FROM inventory", (err, r) => { res.json({ success: true, inventory: r }); }); });
 app.get('/admin_fetch_inventory_logs', (req, res) => { db.query("SELECT * FROM inventory_logs ORDER BY created_at DESC", (err, results) => { res.json({ success: true, logs: results }); }); });
 app.post('/admin_add_inventory', (req, res) => {
@@ -465,7 +474,6 @@ app.post('/admin_delete_staff', async (req, res) => {
 app.get('/admin_fetch_all_payments', (req, res) => { db.query(`SELECT p.*, a.event_type, u.username as customer_name FROM payments p LEFT JOIN appointments a ON p.appointment_id = a.id LEFT JOIN users u ON a.user_id = u.id ORDER BY p.transaction_date DESC`, (err, results) => { res.json({ success: true, payments: results }); }); });
 app.get('/admin_fetch_payment_history', (req, res) => { db.query("SELECT * FROM payments WHERE appointment_id = ? ORDER BY transaction_date DESC", [req.query.appointmentId], (err, r) => { res.json({ success: true, history: r }); }); });
 
-// PAYMENT ENDPOINT UPGRADE: Accept image upload for payment receipt
 app.post('/admin_process_payment', upload.single('receiptImage'), async (req, res) => {
   const { appointmentId, amount, paymentType, remarks } = req.body;
   if (!appointmentId || !amount) return res.status(400).json({ success: false, message: "Appointment ID and Amount are required." });
@@ -489,8 +497,6 @@ app.get('/admin_fetch_activity_logs', (req, res) => {
 app.get('/admin_fetch_reports', async (req, res) => {
   try {
     const pDb = db.promise();
-    
-    // 1. Financial & Operational Summary
     const [[rev]] = await pDb.query("SELECT COALESCE(SUM(amount_paid), 0) as total_rev FROM payments");
     const [[bookings]] = await pDb.query(`
       SELECT 
@@ -502,7 +508,6 @@ app.get('/admin_fetch_reports', async (req, res) => {
       FROM appointments
     `);
     
-    // 2. Events breakdown
     const [eventsByType] = await pDb.query(`
       SELECT event_type, COUNT(*) as count, COALESCE(SUM(guest_count), 0) as total_guests
       FROM appointments 
@@ -510,7 +515,6 @@ app.get('/admin_fetch_reports', async (req, res) => {
       ORDER BY count DESC
     `);
 
-    // 3. Catering Inventory Stock Status
     const [inventoryAlerts] = await pDb.query(`
       SELECT name, quantity, unit 
       FROM inventory 
@@ -518,7 +522,6 @@ app.get('/admin_fetch_reports', async (req, res) => {
       ORDER BY quantity ASC
     `);
 
-    // 4. Recent Order Log
     const [recentCateringOrders] = await pDb.query(`
       SELECT 
         a.id, 
@@ -550,7 +553,6 @@ app.get('/admin_fetch_reports', async (req, res) => {
       recentCateringOrders
     });
   } catch (e) { 
-    console.error("Error generating reports:", e);
     res.status(500).json({ success: false, message: "Error generating reports: " + e.message }); 
   }
 });
@@ -558,10 +560,7 @@ app.get('/admin_fetch_reports', async (req, res) => {
 app.get('/fetch_packages', (req, res) => {
     const sql = "SELECT * FROM packages";
     db.query(sql, (err, results) => {
-        if (err) {
-            console.error("Error fetching packages:", err);
-            return res.status(500).json({ success: false, message: "Database error" });
-        }
+        if (err) return res.status(500).json({ success: false, message: "Database error" });
         res.json({ success: true, packages: results });
     });
 });
@@ -569,12 +568,8 @@ app.get('/fetch_packages', (req, res) => {
 app.post('/admin_add_package', (req, res) => {
     const { package_name, description, price, pax_capacity, dish_limit } = req.body;
     const sql = "INSERT INTO packages (package_name, description, price, pax_capacity, dish_limit) VALUES (?, ?, ?, ?, ?)";
-    
-    db.query(sql, [package_name, description, price, pax_capacity, dish_limit], (err, result) => {
-        if (err) {
-            console.error("Error adding package:", err);
-            return res.status(500).json({ success: false, message: "Database error", error: err });
-        }
+    db.query(sql, [package_name, description, price, pax_capacity, dish_limit], (err) => {
+        if (err) return res.status(500).json({ success: false, message: "Database error", error: err });
         res.json({ success: true, message: "Package added successfully" });
     });
 });
@@ -582,25 +577,16 @@ app.post('/admin_add_package', (req, res) => {
 app.post('/admin_update_package', (req, res) => {
     const { id, package_name, description, price, pax_capacity, dish_limit } = req.body;
     const sql = "UPDATE packages SET package_name=?, description=?, price=?, pax_capacity=?, dish_limit=? WHERE id=?";
-    
-    db.query(sql, [package_name, description, price, pax_capacity, dish_limit, id], (err, result) => {
-        if (err) {
-            console.error("Error updating package:", err);
-            return res.status(500).json({ success: false, message: "Database error", error: err });
-        }
+    db.query(sql, [package_name, description, price, pax_capacity, dish_limit, id], (err) => {
+        if (err) return res.status(500).json({ success: false, message: "Database error", error: err });
         res.json({ success: true, message: "Package updated successfully" });
     });
 });
 
 app.post('/admin_delete_package', (req, res) => {
     const { id } = req.body;
-    const sql = "DELETE FROM packages WHERE id=?";
-    
-    db.query(sql, [id], (err, result) => {
-        if (err) {
-            console.error("Error deleting package:", err);
-            return res.status(500).json({ success: false, message: "Database error" });
-        }
+    db.query("DELETE FROM packages WHERE id=?", [id], (err) => {
+        if (err) return res.status(500).json({ success: false, message: "Database error" });
         res.json({ success: true, message: "Package deleted successfully" });
     });
 });
