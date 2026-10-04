@@ -5,6 +5,8 @@ const cors = require('cors');
 const bcrypt = require('bcryptjs'); 
 const multer = require('multer'); 
 const fs = require('fs');
+const nodemailer = require('nodemailer');
+const crypto = require('crypto');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -34,6 +36,14 @@ const db = mysql.createPool({
   ssl: { rejectUnauthorized: true }
 });
 
+const transporter = nodemailer.createTransport({
+    service: 'gmail',
+    auth: {
+        user: process.env.EMAIL_USER,
+        pass: process.env.EMAIL_PASS
+    }
+});
+
 // MULTI-DAY BOOKING UPGRADE
 db.query("SHOW COLUMNS FROM appointments LIKE 'end_date'", (err, results) => {
     if (!err && results.length === 0) {
@@ -54,7 +64,7 @@ db.query("SHOW COLUMNS FROM payments LIKE 'receipt_url'", (err, results) => {
     }
 });
 
-// RBAC UPGRADE: Add role column to admins table
+// RBAC UPGRADE
 db.query("SHOW COLUMNS FROM admins LIKE 'role'", (err, results) => {
     if (!err && results.length === 0) {
         db.query("ALTER TABLE admins ADD COLUMN role ENUM('admin', 'manager', 'staff') NOT NULL DEFAULT 'admin'", (err) => {
@@ -80,6 +90,10 @@ async function createNotification(userId, message) {
     } catch (err) { console.error("Failed to create notification:", err); }
 }
 
+// =====================================
+// AUTHENTICATION ROUTES
+// =====================================
+
 app.post('/register', async (req, res) => {
   const { name, email, password } = req.body;
   if (!name || !email || !password) return res.status(400).json({ success: false, message: "Missing required fields" });
@@ -87,10 +101,23 @@ app.post('/register', async (req, res) => {
   db.query("SELECT id FROM users WHERE email = ?", [email], async (err, results) => {
     if (err) return res.status(500).json({ success: false, message: "Database error" });
     if (results.length > 0) return res.status(400).json({ success: false, message: "Email already registered" });
+    
     const hashedPassword = await bcrypt.hash(password, 10);
-    db.query("INSERT INTO users (username, email, password, is_verified) VALUES (?, ?, ?, 0)", [name, email, hashedPassword], (err, result) => {
+    const verificationToken = crypto.randomBytes(32).toString('hex');
+
+    db.query("INSERT INTO users (username, email, password, is_verified, email_verified, email_verification_token) VALUES (?, ?, ?, 0, 0, ?)", 
+    [name, email, hashedPassword, verificationToken], (err, result) => {
       if (err) return res.status(500).json({ success: false, message: "Registration failed" });
-      res.json({ success: true, message: "User registered successfully", user: { id: result.insertId, fullName: name, email: email, verified: false } });
+      
+      const verifyUrl = `${process.env.FRONTEND_URL || 'http://localhost:5173'}/verify-email?token=${verificationToken}`;
+      transporter.sendMail({
+          from: process.env.EMAIL_USER,
+          to: email,
+          subject: 'Verify your Mommy Rosal Account',
+          html: `<p>Hi ${name},</p><p>Please click <a href="${verifyUrl}">here</a> to verify your email address and activate your account.</p>`
+      }).catch(console.error);
+
+      res.json({ success: true, message: "Account created! Please check your email to verify your account before logging in." });
     });
   });
 });
@@ -98,14 +125,56 @@ app.post('/register', async (req, res) => {
 app.post('/login', (req, res) => {
   const { email, password } = req.body; 
   if (!email || !password) return res.status(400).json({ success: false, message: "Missing credentials" });
+  
   db.query("SELECT * FROM users WHERE email = ? OR username = ? LIMIT 1", [email, email], async (err, results) => {
     if (err) return res.status(500).json({ success: false, message: "Database error" });
     if (results.length === 0) return res.status(400).json({ success: false, message: "No user found with that email or name" });
+    
     const user = results[0];
     const isMatch = await bcrypt.compare(password, user.password);
-    if (isMatch) res.json({ success: true, message: "Login successful", user: { id: user.id, fullName: user.username, email: user.email, verified: Boolean(user.is_verified) } });
-    else res.status(400).json({ success: false, message: "Invalid password" });
+    
+    if (isMatch) {
+      if (user.email_verified === 0) {
+          return res.status(403).json({ success: false, message: "Please verify your email address before logging in. Check your inbox." });
+      }
+      res.json({ success: true, message: "Login successful", user: { id: user.id, fullName: user.username, email: user.email, verified: Boolean(user.is_verified) } });
+    } else {
+      res.status(400).json({ success: false, message: "Invalid password" });
+    }
   });
+});
+
+app.post('/verify-email', (req, res) => {
+    const { token } = req.body;
+    db.query("SELECT id FROM users WHERE email_verification_token = ?", [token], (err, results) => {
+        if (results.length === 0) return res.status(400).json({ success: false, message: "Invalid or expired verification link." });
+        
+        db.query("UPDATE users SET email_verified = 1, email_verification_token = NULL WHERE id = ?", [results[0].id], (err) => {
+            res.json({ success: true, message: "Email verified successfully! You can now log in." });
+        });
+    });
+});
+
+app.post('/google-login', (req, res) => {
+    const { email, name, googleId } = req.body;
+    
+    db.query("SELECT * FROM users WHERE email = ? LIMIT 1", [email], (err, results) => {
+        if (err) return res.status(500).json({ success: false, message: "Database error" });
+        
+        if (results.length > 0) {
+            const user = results[0];
+            if (!user.google_id) {
+                db.query("UPDATE users SET google_id = ?, email_verified = 1 WHERE id = ?", [googleId, user.id]);
+            }
+            res.json({ success: true, message: "Login successful", user: { id: user.id, fullName: user.username, email: user.email, verified: Boolean(user.is_verified) } });
+        } else {
+            db.query("INSERT INTO users (username, email, password, is_verified, email_verified, google_id) VALUES (?, ?, '', 0, 1, ?)", 
+            [name, email, googleId], (err, result) => {
+                if (err) return res.status(500).json({ success: false, message: "Google signup failed" });
+                res.json({ success: true, message: "Signup successful", user: { id: result.insertId, fullName: name, email, verified: false } });
+            });
+        }
+    });
 });
 
 app.post('/adminlogin', (req, res) => {
@@ -120,18 +189,18 @@ app.post('/adminlogin', (req, res) => {
   });
 });
 
+// =====================================
+// SYSTEM ROUTES
+// =====================================
+
 app.post('/verify', upload.single('idImage'), async (req, res) => {
   try {
     const { userId, idType, idNumber, lastName, firstName, address, phone, email } = req.body;
     
-    if (!userId) {
-      return res.status(400).json({ success: false, message: "User ID is missing." });
-    }
+    if (!userId) return res.status(400).json({ success: false, message: "User ID is missing." });
 
     const idImagePath = req.file ? req.file.path : null;
-    if (!idImagePath) {
-      return res.status(400).json({ success: false, message: "ID image is required for upload." });
-    }
+    if (!idImagePath) return res.status(400).json({ success: false, message: "ID image is required for upload." });
 
     const pDb = db.promise();
     
@@ -140,15 +209,9 @@ app.post('/verify', upload.single('idImage'), async (req, res) => {
       (user_id, id_type, id_number, last_name, first_name, address, phone, email, id_image_path, status) 
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'Pending')
       ON DUPLICATE KEY UPDATE 
-      id_type = VALUES(id_type),
-      id_number = VALUES(id_number),
-      last_name = VALUES(last_name),
-      first_name = VALUES(first_name),
-      address = VALUES(address),
-      phone = VALUES(phone),
-      email = VALUES(email),
-      id_image_path = VALUES(id_image_path),
-      status = 'Pending'
+      id_type = VALUES(id_type), id_number = VALUES(id_number), last_name = VALUES(last_name),
+      first_name = VALUES(first_name), address = VALUES(address), phone = VALUES(phone),
+      email = VALUES(email), id_image_path = VALUES(id_image_path), status = 'Pending'
     `;
 
     await pDb.query(sql, [userId, idType, idNumber, lastName, firstName, address, phone || '', email || '', idImagePath]);
@@ -156,8 +219,7 @@ app.post('/verify', upload.single('idImage'), async (req, res) => {
 
     res.json({ success: true, message: "Verification request submitted successfully!" });
   } catch (error) {
-    console.error("Verification Submission Error:", error);
-    res.status(500).json({ success: false, message: "Database error processing verification: " + error.message });
+    res.status(500).json({ success: false, message: "Database error processing verification." });
   }
 });
 
@@ -204,7 +266,6 @@ app.get('/fetch_booked_dates', (req, res) => {
             curr.setDate(curr.getDate() + 1);
         }
     });
-
     res.json({ success: true, bookedDates: allBookedDates });
   });
 });
@@ -214,10 +275,8 @@ app.get('/fetch_user_appointments', (req, res) => {
   if (!userId) return res.status(400).json({ success: false, message: "User ID is required." });
   const sql = `
     SELECT a.id, a.event_type, a.package_type, a.preferred_date, a.end_date, a.guest_count, a.status, a.total_cost, a.selected_dishes, p.description as inclusions 
-    FROM appointments a 
-    LEFT JOIN packages p ON a.package_type = p.package_name
-    WHERE a.user_id = ? 
-    ORDER BY a.created_at DESC
+    FROM appointments a LEFT JOIN packages p ON a.package_type = p.package_name
+    WHERE a.user_id = ? ORDER BY a.created_at DESC
   `;
   db.query(sql, [userId], (err, results) => {
     if (err) return res.status(500).json({ success: false, message: "Error fetching appointments" });
@@ -241,7 +300,6 @@ app.post('/book_event', (req, res) => {
     return res.status(400).json({ success: false, message: "All fields are required." });
   }
 
-  // Multi-day calculation
   let endDate = preferredDate;
   if (duration > 1) {
       const d = new Date(preferredDate);
@@ -328,7 +386,6 @@ app.post('/admin_update_booking_status', async (req, res) => {
     await logSystemActivity('Booking', logMessage);
     res.json({ success: true, message: `Booking #${bookingId} status successfully updated to ${status}.` });
   } catch (err) {
-    console.error("Error updating booking status:", err);
     res.status(500).json({ success: false, message: "Error updating status." });
   }
 });
@@ -371,7 +428,6 @@ app.post('/admin_reconcile_booking', async (req, res) => {
     
     res.json({ success: true, message: "Event completed and inventory successfully reconciled!" });
   } catch (err) {
-    console.error("Reconciliation Error Detailed:", err);
     res.status(500).json({ success: false, message: "Server error: " + err.message });
   }
 });
@@ -394,7 +450,6 @@ app.post('/admin_delete_booking', async (req, res) => {
     await logSystemActivity('Booking', logMessage);
     res.json({ success: true, message: 'Booking deleted' });
   } catch (err) {
-    console.error("Error deleting booking:", err);
     res.status(500).json({ success: false, message: 'Server error' });
   }
 });
