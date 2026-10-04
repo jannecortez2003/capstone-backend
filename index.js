@@ -5,7 +5,6 @@ const cors = require('cors');
 const bcrypt = require('bcryptjs'); 
 const multer = require('multer'); 
 const fs = require('fs');
-const nodemailer = require('nodemailer');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -33,14 +32,6 @@ const db = mysql.createPool({
   connectionLimit: 10,
   queueLimit: 0,
   ssl: { rejectUnauthorized: true }
-});
-
-const transporter = nodemailer.createTransport({
-    service: 'gmail',
-    auth: {
-        user: process.env.EMAIL_USER,
-        pass: process.env.EMAIL_PASS
-    }
 });
 
 // MULTI-DAY BOOKING UPGRADE
@@ -73,7 +64,6 @@ db.query("SHOW COLUMNS FROM admins LIKE 'role'", (err, results) => {
 // GOOGLE AUTH UPGRADE
 db.query("SHOW COLUMNS FROM users LIKE 'google_id'", (err, results) => {
     if (!err && results.length === 0) {
-        // Removed the word UNIQUE from the end of the query below
         db.query("ALTER TABLE users ADD COLUMN google_id VARCHAR(255) NULL", (err) => {
             if (err) console.error("Failed to add google_id column:", err);
             else console.log("Successfully added google_id column for Google Login.");
@@ -118,26 +108,42 @@ app.post('/register', async (req, res) => {
       if (err) return res.status(500).json({ success: false, message: "Registration failed" });
       
       try {
-          // WE AWAIT THE EMAIL SENDING TO CATCH ERRORS
-          await transporter.sendMail({
-              from: '"Mommy Rosal Catering" <' + process.env.EMAIL_USER + '>',
-              to: email,
-              subject: 'Your Verification Code - Mommy Rosal Catering',
-              html: `
-                <div style="font-family: sans-serif; text-align: center; padding: 20px;">
-                    <h2>Welcome to Mommy Rosal's!</h2>
-                    <p>Your email verification code is:</p>
-                    <h1 style="color: #db2777; letter-spacing: 5px;">${otp}</h1>
-                    <p>Please enter this code in the app to activate your account.</p>
-                </div>
-              `
+          // Bypass Render's SMTP block using Brevo's HTTP API
+          const response = await fetch("https://api.brevo.com/v3/smtp/email", {
+              method: "POST",
+              headers: {
+                  "Content-Type": "application/json",
+                  "api-key": process.env.BREVO_API_KEY
+              },
+              body: JSON.stringify({
+                  sender: { 
+                      name: "Mommy Rosal Catering", 
+                      email: process.env.EMAIL_USER // Make sure this is the email you verified on Brevo!
+                  },
+                  to: [{ email: email }],
+                  subject: "Your Verification Code - Mommy Rosal Catering",
+                  htmlContent: `
+                    <div style="font-family: sans-serif; text-align: center; padding: 20px;">
+                        <h2>Welcome to Mommy Rosal's!</h2>
+                        <p>Your email verification code is:</p>
+                        <h1 style="color: #db2777; letter-spacing: 5px;">${otp}</h1>
+                        <p>Please enter this code in the app to activate your account.</p>
+                    </div>
+                  `
+              })
           });
+
+          if (!response.ok) {
+              const errorData = await response.json();
+              throw new Error(errorData.message || "Failed to send email via API");
+          }
+
           res.json({ success: true, message: "OTP sent to your email. Please verify." });
       } catch (mailError) {
           console.error("EMAIL SENDING ERROR:", mailError);
           // Delete the temporary user so they can try signing up again
           db.query("DELETE FROM users WHERE id = ?", [result.insertId]);
-          res.status(500).json({ success: false, message: "Failed to send OTP Email. Check your backend console." });
+          res.status(500).json({ success: false, message: "Failed to send OTP Email. Check your backend logs." });
       }
     });
   });
