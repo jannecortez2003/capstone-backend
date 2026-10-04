@@ -34,12 +34,22 @@ const db = mysql.createPool({
   ssl: { rejectUnauthorized: true }
 });
 
-// MULTI-DAY BOOKING UPGRADE: Automatically alter the table if the column doesn't exist
+// MULTI-DAY BOOKING UPGRADE
 db.query("SHOW COLUMNS FROM appointments LIKE 'end_date'", (err, results) => {
     if (!err && results.length === 0) {
         db.query("ALTER TABLE appointments ADD COLUMN end_date DATE NULL AFTER preferred_date", (err) => {
             if (err) console.error("Failed to add end_date column:", err);
             else console.log("Successfully added end_date column for multi-day bookings.");
+        });
+    }
+});
+
+// PAYMENT RECEIPT UPGRADE: Automatically alter the table if the column doesn't exist
+db.query("SHOW COLUMNS FROM payments LIKE 'receipt_url'", (err, results) => {
+    if (!err && results.length === 0) {
+        db.query("ALTER TABLE payments ADD COLUMN receipt_url VARCHAR(255) NULL", (err) => {
+            if (err) console.error("Failed to add receipt_url column:", err);
+            else console.log("Successfully added receipt_url column for payments.");
         });
     }
 });
@@ -454,12 +464,17 @@ app.post('/admin_delete_staff', async (req, res) => {
 
 app.get('/admin_fetch_all_payments', (req, res) => { db.query(`SELECT p.*, a.event_type, u.username as customer_name FROM payments p LEFT JOIN appointments a ON p.appointment_id = a.id LEFT JOIN users u ON a.user_id = u.id ORDER BY p.transaction_date DESC`, (err, results) => { res.json({ success: true, payments: results }); }); });
 app.get('/admin_fetch_payment_history', (req, res) => { db.query("SELECT * FROM payments WHERE appointment_id = ? ORDER BY transaction_date DESC", [req.query.appointmentId], (err, r) => { res.json({ success: true, history: r }); }); });
-app.post('/admin_process_payment', async (req, res) => {
+
+// PAYMENT ENDPOINT UPGRADE: Accept image upload for payment receipt
+app.post('/admin_process_payment', upload.single('receiptImage'), async (req, res) => {
   const { appointmentId, amount, paymentType, remarks } = req.body;
   if (!appointmentId || !amount) return res.status(400).json({ success: false, message: "Appointment ID and Amount are required." });
+  
+  const receiptUrl = req.file ? req.file.path : null;
+
   try {
       const pDb = db.promise();
-      await pDb.query("INSERT INTO payments (appointment_id, amount_paid, payment_type, remarks, transaction_date) VALUES (?, ?, ?, ?, NOW())", [appointmentId, amount, paymentType || 'Cash', remarks || '']);
+      await pDb.query("INSERT INTO payments (appointment_id, amount_paid, payment_type, remarks, transaction_date, receipt_url) VALUES (?, ?, ?, ?, NOW(), ?)", [appointmentId, amount, paymentType || 'Cash', remarks || '', receiptUrl]);
       await logSystemActivity('Payment', `Processed payment of ₱${amount} for Booking #${appointmentId}`);
       res.json({ success: true, message: "Payment recorded successfully" });
   } catch (err) { res.status(500).json({ success: false, message: "Database error: " + err.message }); }
@@ -487,7 +502,7 @@ app.get('/admin_fetch_reports', async (req, res) => {
       FROM appointments
     `);
     
-    // 2. Events breakdown by Catering Occasion / Type (Weddings, Birthdays, etc.)
+    // 2. Events breakdown
     const [eventsByType] = await pDb.query(`
       SELECT event_type, COUNT(*) as count, COALESCE(SUM(guest_count), 0) as total_guests
       FROM appointments 
@@ -495,7 +510,7 @@ app.get('/admin_fetch_reports', async (req, res) => {
       ORDER BY count DESC
     `);
 
-    // 3. Catering Inventory Stock Status (Equipment & Tableware)
+    // 3. Catering Inventory Stock Status
     const [inventoryAlerts] = await pDb.query(`
       SELECT name, quantity, unit 
       FROM inventory 
@@ -503,7 +518,7 @@ app.get('/admin_fetch_reports', async (req, res) => {
       ORDER BY quantity ASC
     `);
 
-    // 4. Recent Catering Order Log
+    // 4. Recent Order Log
     const [recentCateringOrders] = await pDb.query(`
       SELECT 
         a.id, 
@@ -535,7 +550,7 @@ app.get('/admin_fetch_reports', async (req, res) => {
       recentCateringOrders
     });
   } catch (e) { 
-    console.error("Error generating catering reports:", e);
+    console.error("Error generating reports:", e);
     res.status(500).json({ success: false, message: "Error generating reports: " + e.message }); 
   }
 });
