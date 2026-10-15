@@ -220,6 +220,76 @@ app.post('/adminlogin', (req, res) => {
 });
 
 // =====================================
+// FORGOT PASSWORD ROUTES
+// =====================================
+
+app.post('/forgot-password', (req, res) => {
+    const { email } = req.body;
+    if (!email) return res.status(400).json({ success: false, message: "Email is required" });
+
+    db.query("SELECT id FROM users WHERE email = ?", [email], (err, results) => {
+        if (err) return res.status(500).json({ success: false, message: "Database error" });
+        if (results.length === 0) return res.status(400).json({ success: false, message: "Email not found" });
+
+        // Generate 6-digit OTP
+        const otp = Math.floor(100000 + Math.random() * 900000).toString();
+
+        // Reuse the email_verification_token column for the password reset OTP
+        db.query("UPDATE users SET email_verification_token = ? WHERE email = ?", [otp, email], async (err) => {
+            if (err) return res.status(500).json({ success: false, message: "Failed to generate OTP" });
+
+            try {
+                // Send email using your existing Brevo setup
+                const response = await fetch("https://api.brevo.com/v3/smtp/email", {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json",
+                        "api-key": process.env.BREVO_API_KEY
+                    },
+                    body: JSON.stringify({
+                        sender: { name: "Mommy Rosal Catering", email: process.env.EMAIL_USER },
+                        to: [{ email: email }],
+                        subject: "Password Reset Code - Mommy Rosal Catering",
+                        htmlContent: `
+                          <div style="font-family: sans-serif; text-align: center; padding: 20px;">
+                              <h2>Password Reset Request</h2>
+                              <p>Your 6-digit password reset code is:</p>
+                              <h1 style="color: #db2777; letter-spacing: 5px;">${otp}</h1>
+                              <p>If you did not request this, please ignore this email.</p>
+                          </div>
+                        `
+                    })
+                });
+
+                if (!response.ok) throw new Error("Failed to send email");
+                res.json({ success: true, message: "A 6-digit code has been sent to your email." });
+            } catch (error) {
+                console.error(error);
+                res.status(500).json({ success: false, message: "Failed to send reset email." });
+            }
+        });
+    });
+});
+
+app.post('/reset-password', async (req, res) => {
+    const { email, otp, newPassword } = req.body;
+    if (!email || !otp || !newPassword) return res.status(400).json({ success: false, message: "Missing required fields" });
+
+    db.query("SELECT id FROM users WHERE email = ? AND email_verification_token = ?", [email, otp], async (err, results) => {
+        if (err) return res.status(500).json({ success: false, message: "Database error" });
+        if (results.length === 0) return res.status(400).json({ success: false, message: "Invalid or expired 6-digit code." });
+
+        const hashedPassword = await bcrypt.hash(newPassword, 10);
+
+        // Update password and clear the OTP token
+        db.query("UPDATE users SET password = ?, email_verification_token = NULL WHERE email = ?", [hashedPassword, email], (err) => {
+            if (err) return res.status(500).json({ success: false, message: "Failed to reset password" });
+            res.json({ success: true, message: "Password reset successful! You can now log in." });
+        });
+    });
+});
+
+// =====================================
 // SYSTEM ROUTES
 // =====================================
 
@@ -552,7 +622,7 @@ app.post('/admin_delete_staff', async (req, res) => {
         const [staff] = await pDb.query('SELECT name FROM staff WHERE id = ?', [id]);
         res.json({ success: true });
         await pDb.query("DELETE FROM staff WHERE id = ?", [id]);
-        await logSystemActivity('Staff', `Deleted staff member: ${staff.length > 0 ? staff[0].name : `Staff ID ${id}`}`);
+        await logSystemActivity('Staff', `Deleted staff member: ${staff.length > 0 ? staff[0].name : `Staff ID \${id}`}`);
     } catch (err) { res.status(500).json({ success: false }); }
 });
 
