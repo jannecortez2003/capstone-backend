@@ -322,7 +322,50 @@ app.post('/verify', upload.single('idImage'), async (req, res) => {
     res.status(500).json({ success: false, message: "Database error processing verification." });
   }
 });
+// POST: Website Contact Form
+app.post('/contact-message', async (req, res) => {
+    const { name, email, message } = req.body;
+    
+    if (!name || !email || !message) {
+        return res.status(400).json({ success: false, message: "All fields are required." });
+    }
 
+    try {
+        const response = await fetch("https://api.brevo.com/v3/smtp/email", {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                "api-key": process.env.BREVO_API_KEY
+            },
+            body: JSON.stringify({
+                sender: { name: name, email: email },
+                // This will send the message to YOUR verified business email
+                to: [{ email: process.env.EMAIL_USER }], 
+                subject: `New Website Inquiry from ${name}`,
+                htmlContent: `
+                  <div style="font-family: sans-serif; padding: 20px; color: #333;">
+                      <h2 style="color: #db2777;">New Contact Form Message</h2>
+                      <p><strong>Name:</strong> ${name}</p>
+                      <p><strong>Reply To:</strong> ${email}</p>
+                      <p><strong>Message:</strong></p>
+                      <blockquote style="background: #f9f9f9; border-left: 5px solid #db2777; padding: 15px; margin-left: 0;">
+                        ${message}
+                      </blockquote>
+                  </div>
+                `
+            })
+        });
+
+        if (!response.ok) {
+            throw new Error("Failed to send message via Brevo.");
+        }
+
+        res.json({ success: true, message: "Your message has been sent successfully!" });
+    } catch (error) {
+        console.error("CONTACT FORM ERROR:", error);
+        res.status(500).json({ success: false, message: "Failed to send message. Please try again later." });
+    }
+});
 app.get('/fetch_notifications', (req, res) => {
   const { userId } = req.query;
   if (!userId) return res.status(400).json({ success: false, message: "User ID required" });
