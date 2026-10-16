@@ -12,7 +12,7 @@ const PORT = process.env.PORT || 5000;
 app.use(cors());
 app.use(express.json());
 
-// Serve uploaded files statically
+// Serve uploaded files statically (for Verification & Payments)
 app.use('/uploads', express.static('uploads'));
 if (!fs.existsSync('uploads')) {
     fs.mkdirSync('uploads');
@@ -39,7 +39,6 @@ const db = mysql.createPool({
 // DATABASE AUTO-UPGRADES
 // =====================================
 
-// MULTI-DAY BOOKING UPGRADE
 db.query("SHOW COLUMNS FROM appointments LIKE 'end_date'", (err, results) => {
     if (!err && results.length === 0) {
         db.query("ALTER TABLE appointments ADD COLUMN end_date DATE NULL AFTER preferred_date", (err) => {
@@ -48,7 +47,6 @@ db.query("SHOW COLUMNS FROM appointments LIKE 'end_date'", (err, results) => {
     }
 });
 
-// PAYMENT RECEIPT UPGRADE
 db.query("SHOW COLUMNS FROM payments LIKE 'receipt_url'", (err, results) => {
     if (!err && results.length === 0) {
         db.query("ALTER TABLE payments ADD COLUMN receipt_url VARCHAR(255) NULL", (err) => {
@@ -57,7 +55,6 @@ db.query("SHOW COLUMNS FROM payments LIKE 'receipt_url'", (err, results) => {
     }
 });
 
-// RBAC UPGRADE
 db.query("SHOW COLUMNS FROM admins LIKE 'role'", (err, results) => {
     if (!err && results.length === 0) {
         db.query("ALTER TABLE admins ADD COLUMN role ENUM('admin', 'manager', 'staff') NOT NULL DEFAULT 'admin'", (err) => {
@@ -66,17 +63,14 @@ db.query("SHOW COLUMNS FROM admins LIKE 'role'", (err, results) => {
     }
 });
 
-// GOOGLE AUTH UPGRADE
 db.query("SHOW COLUMNS FROM users LIKE 'google_id'", (err, results) => {
     if (!err && results.length === 0) {
         db.query("ALTER TABLE users ADD COLUMN google_id VARCHAR(255) NULL", (err) => {
             if (err) console.error("Failed to add google_id column:", err);
-            else console.log("Successfully added google_id column for Google Login.");
         });
     }
 });
 
-// MENU IMAGE UPGRADE
 db.query("SHOW COLUMNS FROM menu_items LIKE 'image_url'", (err, results) => {
     if (!err && results.length === 0) {
         db.query("ALTER TABLE menu_items ADD COLUMN image_url VARCHAR(255) NULL", (err) => {
@@ -114,7 +108,6 @@ app.post('/register', async (req, res) => {
     if (results.length > 0) return res.status(400).json({ success: false, message: "Email already registered" });
     
     const hashedPassword = await bcrypt.hash(password, 10);
-    // Generate 6-digit OTP
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
 
     db.query("INSERT INTO users (username, email, password, is_verified, email_verified, email_verification_token) VALUES (?, ?, ?, 0, 0, ?)", 
@@ -122,7 +115,6 @@ app.post('/register', async (req, res) => {
       if (err) return res.status(500).json({ success: false, message: "Registration failed" });
       
       try {
-          // Bypass Render's SMTP block using Brevo's HTTP API
           const response = await fetch("https://api.brevo.com/v3/smtp/email", {
               method: "POST",
               headers: {
@@ -130,10 +122,7 @@ app.post('/register', async (req, res) => {
                   "api-key": process.env.BREVO_API_KEY
               },
               body: JSON.stringify({
-                  sender: { 
-                      name: "Mommy Rosal Catering", 
-                      email: process.env.EMAIL_USER 
-                  },
+                  sender: { name: "Mommy Rosal Catering", email: process.env.EMAIL_USER },
                   to: [{ email: email }],
                   subject: "Your Verification Code - Mommy Rosal Catering",
                   htmlContent: `
@@ -155,7 +144,6 @@ app.post('/register', async (req, res) => {
           res.json({ success: true, message: "OTP sent to your email. Please verify." });
       } catch (mailError) {
           console.error("EMAIL SENDING ERROR:", mailError);
-          // Delete the temporary user so they can try signing up again
           db.query("DELETE FROM users WHERE id = ?", [result.insertId]);
           res.status(500).json({ success: false, message: "Failed to send OTP Email. Check your backend logs." });
       }
@@ -206,12 +194,10 @@ app.post('/google-login', (req, res) => {
         if (results.length > 0) {
             const user = results[0];
             if (!user.google_id) {
-                // Link account, but do NOT bypass ID verification (is_verified remains untouched)
                 db.query("UPDATE users SET google_id = ?, email_verified = 1 WHERE id = ?", [googleId, user.id]);
             }
             res.json({ success: true, message: "Login successful", user: { id: user.id, fullName: user.username, email: user.email, verified: Boolean(user.is_verified) } });
         } else {
-            // New user via Google: email is verified automatically, but account ID is NOT verified (is_verified = 0)
             db.query("INSERT INTO users (username, email, password, is_verified, email_verified, google_id) VALUES (?, ?, '', 0, 1, ?)", 
             [name, email, googleId], (err, result) => {
                 if (err) return res.status(500).json({ success: false, message: "Google signup failed" });
@@ -233,10 +219,6 @@ app.post('/adminlogin', (req, res) => {
   });
 });
 
-// =====================================
-// FORGOT PASSWORD ROUTES
-// =====================================
-
 app.post('/forgot-password', (req, res) => {
     const { email } = req.body;
     if (!email) return res.status(400).json({ success: false, message: "Email is required" });
@@ -245,15 +227,12 @@ app.post('/forgot-password', (req, res) => {
         if (err) return res.status(500).json({ success: false, message: "Database error" });
         if (results.length === 0) return res.status(400).json({ success: false, message: "Email not found" });
 
-        // Generate 6-digit OTP
         const otp = Math.floor(100000 + Math.random() * 900000).toString();
 
-        // Reuse the email_verification_token column for the password reset OTP
         db.query("UPDATE users SET email_verification_token = ? WHERE email = ?", [otp, email], async (err) => {
             if (err) return res.status(500).json({ success: false, message: "Failed to generate OTP" });
 
             try {
-                // Send email using your existing Brevo setup
                 const response = await fetch("https://api.brevo.com/v3/smtp/email", {
                     method: "POST",
                     headers: {
@@ -295,7 +274,6 @@ app.post('/reset-password', async (req, res) => {
 
         const hashedPassword = await bcrypt.hash(newPassword, 10);
 
-        // Update password and clear the OTP token
         db.query("UPDATE users SET password = ?, email_verification_token = NULL WHERE email = ?", [hashedPassword, email], (err) => {
             if (err) return res.status(500).json({ success: false, message: "Failed to reset password" });
             res.json({ success: true, message: "Password reset successful! You can now log in." });
@@ -645,36 +623,35 @@ app.post('/admin_delete_inventory', async (req, res) => {
 });
 
 // =====================================
-// ADMIN MENU ROUTES (WITH IMAGE UPLOAD)
+// ADMIN MENU ROUTES (NO MULTER / CLOUDINARY URLS)
 // =====================================
 
 app.get('/admin_fetch_menu', (req, res) => { 
     db.query("SELECT * FROM menu_items", (err, r) => { res.json({ success: true, items: r }); }); 
 });
 
-app.post('/admin_add_menu', upload.single('image'), (req, res) => {
-    const imageUrl = req.file ? req.file.path.replace(/\\/g, "/") : null;
+app.post('/admin_add_menu', (req, res) => {
+    const { name, category, price, description, image_url } = req.body;
     
-    db.query("SELECT id FROM menu_items WHERE name = ?", [req.body.name], (err, results) => {
-        if (results.length > 0) return res.status(400).json({ success: false, message: "A menu dish with this name already exists!" });
+    db.query("SELECT id FROM menu_items WHERE name = ?", [name], (err, results) => {
+        if (results && results.length > 0) return res.status(400).json({ success: false, message: "A menu dish with this name already exists!" });
         
         db.query("INSERT INTO menu_items (name, category, price, description, image_url) VALUES (?, ?, ?, ?, ?)", 
-        [req.body.name, req.body.category, req.body.price, req.body.description, imageUrl], async (err) => {
+        [name, category, price, description, image_url], async (err) => {
             if (err) return res.status(500).json({ success: false, message: "Database error" });
-            await logSystemActivity('Menu', `Added new menu item: ${req.body.name}`);
+            await logSystemActivity('Menu', `Added new menu item: ${name}`);
             res.json({ success: true });
         });
     });
 });
 
-app.post('/admin_update_menu', upload.single('image'), (req, res) => {
-    // If a new file is uploaded, use it. Otherwise, keep the existing image URL.
-    const imageUrl = req.file ? req.file.path.replace(/\\/g, "/") : req.body.existingImage;
+app.post('/admin_update_menu', (req, res) => {
+    const { id, name, category, price, description, image_url } = req.body;
     
     db.query("UPDATE menu_items SET name=?, category=?, price=?, description=?, image_url=? WHERE id=?", 
-    [req.body.name, req.body.category, req.body.price, req.body.description, imageUrl, req.body.id], async (err) => {
+    [name, category, price, description, image_url, id], async (err) => {
         if (err) return res.status(500).json({ success: false, message: "Database error" });
-        await logSystemActivity('Menu', `Updated menu item: ${req.body.name}`);
+        await logSystemActivity('Menu', `Updated menu item: ${name}`);
         res.json({ success: true });
     });
 });
