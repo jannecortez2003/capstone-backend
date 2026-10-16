@@ -285,14 +285,13 @@ app.post('/reset-password', async (req, res) => {
 // SYSTEM ROUTES
 // =====================================
 
-app.post('/verify', upload.single('idImage'), async (req, res) => {
+app.post('/verify', async (req, res) => {
   try {
-    const { userId, idType, idNumber, lastName, firstName, address, phone, email } = req.body;
+    // Note: We now extract idImage directly from req.body instead of relying on multer's req.file
+    const { userId, idType, idNumber, lastName, firstName, address, phone, email, idImage } = req.body;
     
     if (!userId) return res.status(400).json({ success: false, message: "User ID is missing." });
-
-    const idImagePath = req.file ? req.file.path : null;
-    if (!idImagePath) return res.status(400).json({ success: false, message: "ID image is required for upload." });
+    if (!idImage) return res.status(400).json({ success: false, message: "ID image is required for upload." });
 
     const pDb = db.promise();
     
@@ -306,7 +305,8 @@ app.post('/verify', upload.single('idImage'), async (req, res) => {
       email = VALUES(email), id_image_path = VALUES(id_image_path), status = 'Pending'
     `;
 
-    await pDb.query(sql, [userId, idType, idNumber, lastName, firstName, address, phone || '', email || '', idImagePath]);
+    // Save the Cloudinary URL (idImage) into the id_image_path column
+    await pDb.query(sql, [userId, idType, idNumber, lastName, firstName, address, phone || '', email || '', idImage]);
     await logSystemActivity('User', `Verification request submitted by ${firstName} ${lastName}`);
 
     res.json({ success: true, message: "Verification request submitted successfully!" });
