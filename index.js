@@ -12,6 +12,7 @@ const PORT = process.env.PORT || 5000;
 app.use(cors());
 app.use(express.json());
 
+// Serve uploaded files statically
 app.use('/uploads', express.static('uploads'));
 if (!fs.existsSync('uploads')) {
     fs.mkdirSync('uploads');
@@ -33,6 +34,10 @@ const db = mysql.createPool({
   queueLimit: 0,
   ssl: { rejectUnauthorized: true }
 });
+
+// =====================================
+// DATABASE AUTO-UPGRADES
+// =====================================
 
 // MULTI-DAY BOOKING UPGRADE
 db.query("SHOW COLUMNS FROM appointments LIKE 'end_date'", (err, results) => {
@@ -67,6 +72,15 @@ db.query("SHOW COLUMNS FROM users LIKE 'google_id'", (err, results) => {
         db.query("ALTER TABLE users ADD COLUMN google_id VARCHAR(255) NULL", (err) => {
             if (err) console.error("Failed to add google_id column:", err);
             else console.log("Successfully added google_id column for Google Login.");
+        });
+    }
+});
+
+// MENU IMAGE UPGRADE
+db.query("SHOW COLUMNS FROM menu_items LIKE 'image_url'", (err, results) => {
+    if (!err && results.length === 0) {
+        db.query("ALTER TABLE menu_items ADD COLUMN image_url VARCHAR(255) NULL", (err) => {
+            if (err) console.error("Failed to add image_url column:", err);
         });
     }
 });
@@ -118,7 +132,7 @@ app.post('/register', async (req, res) => {
               body: JSON.stringify({
                   sender: { 
                       name: "Mommy Rosal Catering", 
-                      email: process.env.EMAIL_USER // Make sure this is the email you verified on Brevo!
+                      email: process.env.EMAIL_USER 
                   },
                   to: [{ email: email }],
                   subject: "Your Verification Code - Mommy Rosal Catering",
@@ -322,7 +336,7 @@ app.post('/verify', upload.single('idImage'), async (req, res) => {
     res.status(500).json({ success: false, message: "Database error processing verification." });
   }
 });
-// POST: Website Contact Form
+
 app.post('/contact-message', async (req, res) => {
     const { name, email, message } = req.body;
     
@@ -338,10 +352,8 @@ app.post('/contact-message', async (req, res) => {
                 "api-key": process.env.BREVO_API_KEY
             },
             body: JSON.stringify({
-                // THE FIX: The sender MUST be your verified business email in Brevo.
                 sender: { name: "Website Contact Form", email: process.env.EMAIL_USER },
                 to: [{ email: process.env.EMAIL_USER }],
-                // The customer's email goes here so you can easily hit "Reply" in your inbox.
                 replyTo: { email: email, name: name }, 
                 subject: `New Website Inquiry from ${name}`,
                 htmlContent: `
@@ -370,6 +382,7 @@ app.post('/contact-message', async (req, res) => {
         res.status(500).json({ success: false, message: "Failed to send message. Please try again later." });
     }
 });
+
 app.get('/fetch_notifications', (req, res) => {
   const { userId } = req.query;
   if (!userId) return res.status(400).json({ success: false, message: "User ID required" });
@@ -631,22 +644,41 @@ app.post('/admin_delete_inventory', async (req, res) => {
   } catch (err) { res.status(500).json({ success: false, message: 'Server error' }); }
 });
 
-app.get('/admin_fetch_menu', (req, res) => { db.query("SELECT * FROM menu_items", (err, r) => { res.json({ success: true, items: r }); }); });
-app.post('/admin_add_menu', (req, res) => {
+// =====================================
+// ADMIN MENU ROUTES (WITH IMAGE UPLOAD)
+// =====================================
+
+app.get('/admin_fetch_menu', (req, res) => { 
+    db.query("SELECT * FROM menu_items", (err, r) => { res.json({ success: true, items: r }); }); 
+});
+
+app.post('/admin_add_menu', upload.single('image'), (req, res) => {
+    const imageUrl = req.file ? req.file.path.replace(/\\/g, "/") : null;
+    
     db.query("SELECT id FROM menu_items WHERE name = ?", [req.body.name], (err, results) => {
         if (results.length > 0) return res.status(400).json({ success: false, message: "A menu dish with this name already exists!" });
-        db.query("INSERT INTO menu_items (name, category, price, description) VALUES (?, ?, ?, ?)", [req.body.name, req.body.category, req.body.price, req.body.description], async (err) => {
+        
+        db.query("INSERT INTO menu_items (name, category, price, description, image_url) VALUES (?, ?, ?, ?, ?)", 
+        [req.body.name, req.body.category, req.body.price, req.body.description, imageUrl], async (err) => {
+            if (err) return res.status(500).json({ success: false, message: "Database error" });
             await logSystemActivity('Menu', `Added new menu item: ${req.body.name}`);
             res.json({ success: true });
         });
     });
 });
-app.post('/admin_update_menu', (req, res) => {
-    db.query("UPDATE menu_items SET name=?, category=?, price=?, description=? WHERE id=?", [req.body.name, req.body.category, req.body.price, req.body.description, req.body.id], async (err) => {
+
+app.post('/admin_update_menu', upload.single('image'), (req, res) => {
+    // If a new file is uploaded, use it. Otherwise, keep the existing image URL.
+    const imageUrl = req.file ? req.file.path.replace(/\\/g, "/") : req.body.existingImage;
+    
+    db.query("UPDATE menu_items SET name=?, category=?, price=?, description=?, image_url=? WHERE id=?", 
+    [req.body.name, req.body.category, req.body.price, req.body.description, imageUrl, req.body.id], async (err) => {
+        if (err) return res.status(500).json({ success: false, message: "Database error" });
         await logSystemActivity('Menu', `Updated menu item: ${req.body.name}`);
         res.json({ success: true });
     });
 });
+
 app.post('/admin_delete_menu', async (req, res) => {
   const id = req.body.id || req.params.id;
   try {
