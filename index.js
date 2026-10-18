@@ -184,6 +184,38 @@ app.post('/login', (req, res) => {
     
     if (isMatch) {
       if (user.email_verified === 0) {
+          // --- FIX FOR LEGACY ACCOUNTS & RESEND OTP ---
+          // Generate a new OTP and send it if they try to log in while unverified
+          const otp = Math.floor(100000 + Math.random() * 900000).toString();
+          
+          db.query("UPDATE users SET email_verification_token = ? WHERE id = ?", [otp, user.id], async (updateErr) => {
+              if (!updateErr) {
+                  try {
+                      await fetch("https://api.brevo.com/v3/smtp/email", {
+                          method: "POST",
+                          headers: {
+                              "Content-Type": "application/json",
+                              "api-key": process.env.BREVO_API_KEY
+                          },
+                          body: JSON.stringify({
+                              sender: { name: "Mommy Rosal Catering", email: process.env.EMAIL_USER },
+                              to: [{ email: user.email }], // Use user.email in case they logged in with username
+                              subject: "Your Verification Code - Mommy Rosal Catering",
+                              htmlContent: `
+                                <div style="font-family: sans-serif; text-align: center; padding: 20px;">
+                                    <h2>Welcome back to Mommy Rosal's!</h2>
+                                    <p>Please verify your email to continue logging in. Your code is:</p>
+                                    <h1 style="color: #db2777; letter-spacing: 5px;">${otp}</h1>
+                                </div>
+                              `
+                          })
+                      });
+                  } catch (mailError) {
+                      console.error("FAILED TO SEND LOGIN OTP:", mailError);
+                  }
+              }
+          });
+
           return res.status(403).json({ success: false, message: "Please verify your email address before logging in." });
       }
       res.json({ success: true, message: "Login successful", user: { id: user.id, fullName: user.username, email: user.email, verified: Boolean(user.is_verified) } });
