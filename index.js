@@ -432,8 +432,8 @@ app.get('/fetch_user_payments', (req, res) => {
   });
 });
 
-app.post('/book_event', (req, res) => {
-  const { userId, eventType, packageType, preferredDate, duration, guestCount, selectedDishes, notes } = req.body;
+app.post('/book_event', async (req, res) => {
+  const { userId, eventType, packageType, preferredDate, duration, guestCount, selectedDishes, notes, totalCost } = req.body;
   if (!userId || !eventType || !packageType || !preferredDate || !guestCount || !selectedDishes) {
     return res.status(400).json({ success: false, message: "All fields are required." });
   }
@@ -459,12 +459,27 @@ app.post('/book_event', (req, res) => {
   requiredInventory.push('Lights (assorted): 1');
   const requiredInventoryStr = requiredInventory.join('; ');
 
-  const sql = `INSERT INTO appointments (user_id, event_type, package_type, preferred_date, end_date, guest_count, selected_dishes, required_inventory, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Pending')`;
-  db.query(sql, [userId, eventType, packageType, preferredDate, endDate, guestCount, selectedDishes, requiredInventoryStr], (err, result) => {
-    if (err) return res.status(500).json({ success: false, message: "Database error: " + err.message });
+  try {
+    const pDb = db.promise();
+    let finalCost = totalCost;
+
+    if (!finalCost || isNaN(finalCost)) {
+      const [pkgRows] = await pDb.query("SELECT price FROM packages WHERE package_name = ? LIMIT 1", [packageType]);
+      if (pkgRows.length > 0) {
+        finalCost = parseFloat(pkgRows[0].price);
+      } else {
+        finalCost = 0.00;
+      }
+    }
+
+    const sql = `INSERT INTO appointments (user_id, event_type, package_type, preferred_date, end_date, guest_count, selected_dishes, required_inventory, total_cost, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'Pending')`;
+    const [result] = await pDb.query(sql, [userId, eventType, packageType, preferredDate, endDate, guestCount, selectedDishes, requiredInventoryStr, finalCost]);
+    
     createNotification(userId, `Your booking for ${eventType} starting on ${preferredDate} has been received and is pending review.`);
     res.json({ success: true, message: "Event booking successful. We will contact you shortly!", booking_id: result.insertId });
-  });
+  } catch (err) {
+    res.status(500).json({ success: false, message: "Database error: " + err.message });
+  }
 });
 
 app.get('/admin_fetch_dashboard_stats', async (req, res) => {
@@ -494,7 +509,7 @@ app.post('/admin_update_booking_status', async (req, res) => {
 
   try {
     const pDb = db.promise();
-    const [rows] = await pDb.query(`SELECT a.user_id, a.required_inventory, a.status, a.event_type, a.preferred_date, u.username FROM appointments a LEFT JOIN users u ON a.user_id = u.id WHERE a.id = ?`, [bookingId]);
+    const [rows] = await pDb.query(`SELECT a.user_id, a.package_type, a.required_inventory, a.status, a.event_type, a.preferred_date, a.total_cost, u.username FROM appointments a LEFT JOIN users u ON a.user_id = u.id WHERE a.id = ?`, [bookingId]);
     if (rows.length === 0) return res.status(404).json({ success: false, message: "Booking not found" });
     const booking = rows[0];
     
@@ -510,7 +525,14 @@ app.post('/admin_update_booking_status', async (req, res) => {
           }
         }
       }
-      await pDb.query("UPDATE appointments SET status = ?, total_cost = COALESCE(total_cost, 30000.00) WHERE id = ?", [status, bookingId]);
+
+      let costToSet = booking.total_cost;
+      if (!costToSet || parseFloat(costToSet) === 0) {
+        const [pkg] = await pDb.query("SELECT price FROM packages WHERE package_name = ? LIMIT 1", [booking.package_type]);
+        costToSet = pkg.length > 0 ? parseFloat(pkg[0].price) : 30000.00;
+      }
+
+      await pDb.query("UPDATE appointments SET status = ?, total_cost = ? WHERE id = ?", [status, costToSet, bookingId]);
     } else {
       await pDb.query("UPDATE appointments SET status = ? WHERE id = ?", [status, bookingId]);
     }
