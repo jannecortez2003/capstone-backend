@@ -428,7 +428,8 @@ app.get('/fetch_booked_dates', (req, res) => {
   db.query("SELECT preferred_date, end_date FROM appointments WHERE status != 'Cancelled'", (err, results) => {
     if (err) return res.status(500).json({ success: false, message: "Database error" });
     
-    let allBookedDates = [];
+    let allBookedDates = new Set(); // Use a Set to automatically handle duplicate dates
+    
     results.forEach(row => {
         let curr = new Date(row.preferred_date);
         let end = row.end_date ? new Date(row.end_date) : new Date(row.preferred_date);
@@ -436,15 +437,27 @@ app.get('/fetch_booked_dates', (req, res) => {
         curr.setHours(0,0,0,0);
         end.setHours(0,0,0,0);
         
-        while (curr <= end) {
-            const y = curr.getFullYear();
-            const m = String(curr.getMonth() + 1).padStart(2, '0');
-            const d = String(curr.getDate()).padStart(2, '0');
-            allBookedDates.push(`${y}-${m}-${d}`);
-            curr.setDate(curr.getDate() + 1);
+        // Add a 3-day buffer BEFORE the event starts
+        let bufferStart = new Date(curr);
+        bufferStart.setDate(bufferStart.getDate() - 3);
+
+        // Add a 3-day buffer AFTER the event ends
+        let bufferEnd = new Date(end);
+        bufferEnd.setDate(bufferEnd.getDate() + 3);
+        
+        // Loop from bufferStart to bufferEnd to block all of them
+        let pointer = new Date(bufferStart);
+        while (pointer <= bufferEnd) {
+            const y = pointer.getFullYear();
+            const m = String(pointer.getMonth() + 1).padStart(2, '0');
+            const d = String(pointer.getDate()).padStart(2, '0');
+            allBookedDates.add(`${y}-${m}-${d}`);
+            pointer.setDate(pointer.getDate() + 1);
         }
     });
-    res.json({ success: true, bookedDates: allBookedDates });
+
+    // Convert the Set back to an array before sending to the frontend
+    res.json({ success: true, bookedDates: Array.from(allBookedDates) });
   });
 });
 
