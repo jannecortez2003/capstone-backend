@@ -39,6 +39,14 @@ const db = mysql.createPool({
 // DATABASE AUTO-UPGRADES
 // =====================================
 
+db.query("SHOW COLUMNS FROM packages LIKE 'physical_assets'", (err, results) => {
+    if (!err && results.length === 0) {
+        db.query("ALTER TABLE packages ADD COLUMN physical_assets TEXT NULL", (err) => {
+            if (err) console.error("Failed to add physical_assets column:", err);
+        });
+    }
+});
+
 db.query("SHOW COLUMNS FROM appointments LIKE 'end_date'", (err, results) => {
     if (!err && results.length === 0) {
         db.query("ALTER TABLE appointments ADD COLUMN end_date DATE NULL AFTER preferred_date", (err) => {
@@ -644,6 +652,20 @@ app.post('/admin_delete_inventory', async (req, res) => {
   } catch (err) { res.status(500).json({ success: false, message: 'Server error' }); }
 });
 
+app.post('/admin_delete_inventory_logs', async (req, res) => {
+  const { logIds } = req.body;
+  if (!logIds || !Array.isArray(logIds) || logIds.length === 0) {
+      return res.status(400).json({ success: false, message: "No logs selected" });
+  }
+  try {
+      const pDb = db.promise();
+      await pDb.query('DELETE FROM inventory_logs WHERE id IN (?)', [logIds]);
+      res.json({ success: true, message: 'Logs deleted successfully' });
+  } catch (err) { 
+      res.status(500).json({ success: false, message: 'Server error' }); 
+  }
+});
+
 // =====================================
 // ADMIN MENU ROUTES (NO MULTER / CLOUDINARY URLS)
 // =====================================
@@ -805,18 +827,18 @@ app.get('/fetch_packages', (req, res) => {
 });
 
 app.post('/admin_add_package', (req, res) => {
-    const { package_name, description, price, pax_capacity, dish_limit } = req.body;
-    const sql = "INSERT INTO packages (package_name, description, price, pax_capacity, dish_limit) VALUES (?, ?, ?, ?, ?)";
-    db.query(sql, [package_name, description, price, pax_capacity, dish_limit], (err) => {
+    const { package_name, description, price, pax_capacity, dish_limit, physical_assets } = req.body;
+    const sql = "INSERT INTO packages (package_name, description, price, pax_capacity, dish_limit, physical_assets) VALUES (?, ?, ?, ?, ?, ?)";
+    db.query(sql, [package_name, description, price, pax_capacity, dish_limit, physical_assets], (err) => {
         if (err) return res.status(500).json({ success: false, message: "Database error", error: err });
         res.json({ success: true, message: "Package added successfully" });
     });
 });
 
 app.post('/admin_update_package', (req, res) => {
-    const { id, package_name, description, price, pax_capacity, dish_limit } = req.body;
-    const sql = "UPDATE packages SET package_name=?, description=?, price=?, pax_capacity=?, dish_limit=? WHERE id=?";
-    db.query(sql, [package_name, description, price, pax_capacity, dish_limit, id], (err) => {
+    const { id, package_name, description, price, pax_capacity, dish_limit, physical_assets } = req.body;
+    const sql = "UPDATE packages SET package_name=?, description=?, price=?, pax_capacity=?, dish_limit=?, physical_assets=? WHERE id=?";
+    db.query(sql, [package_name, description, price, pax_capacity, dish_limit, physical_assets, id], (err) => {
         if (err) return res.status(500).json({ success: false, message: "Database error", error: err });
         res.json({ success: true, message: "Package updated successfully" });
     });
