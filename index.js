@@ -38,63 +38,31 @@ const db = mysql.createPool({
 // DATABASE AUTO-UPGRADES
 // =====================================
 db.query("SHOW COLUMNS FROM packages LIKE 'physical_assets'", (err, results) => {
-    if (!err && results.length === 0) {
-        db.query("ALTER TABLE packages ADD COLUMN physical_assets TEXT NULL", (err) => {
-            if (err) console.error("Failed to add physical_assets column:", err);
-        });
-    }
+    if (!err && results.length === 0) db.query("ALTER TABLE packages ADD COLUMN physical_assets TEXT NULL");
 });
-
 db.query("SHOW COLUMNS FROM appointments LIKE 'end_date'", (err, results) => {
-    if (!err && results.length === 0) {
-        db.query("ALTER TABLE appointments ADD COLUMN end_date DATE NULL AFTER preferred_date", (err) => {
-            if (err) console.error("Failed to add end_date column:", err);
-        });
-    }
+    if (!err && results.length === 0) db.query("ALTER TABLE appointments ADD COLUMN end_date DATE NULL AFTER preferred_date");
 });
-
 db.query("SHOW COLUMNS FROM appointments LIKE 'event_time'", (err, results) => {
-    if (!err && results.length === 0) {
-        db.query("ALTER TABLE appointments ADD COLUMN event_time VARCHAR(50) NULL AFTER end_date");
-    }
+    if (!err && results.length === 0) db.query("ALTER TABLE appointments ADD COLUMN event_time VARCHAR(50) NULL AFTER end_date");
 });
-
 db.query("SHOW COLUMNS FROM appointments LIKE 'event_location'", (err, results) => {
-    if (!err && results.length === 0) {
-        db.query("ALTER TABLE appointments ADD COLUMN event_location VARCHAR(255) NULL AFTER event_time");
-    }
+    if (!err && results.length === 0) db.query("ALTER TABLE appointments ADD COLUMN event_location VARCHAR(255) NULL AFTER event_time");
 });
-
+db.query("SHOW COLUMNS FROM appointments LIKE 'service_type'", (err, results) => {
+    if (!err && results.length === 0) db.query("ALTER TABLE appointments ADD COLUMN service_type VARCHAR(100) NULL AFTER event_type");
+});
 db.query("SHOW COLUMNS FROM payments LIKE 'receipt_url'", (err, results) => {
-    if (!err && results.length === 0) {
-        db.query("ALTER TABLE payments ADD COLUMN receipt_url VARCHAR(255) NULL", (err) => {
-            if (err) console.error("Failed to add receipt_url column:", err);
-        });
-    }
+    if (!err && results.length === 0) db.query("ALTER TABLE payments ADD COLUMN receipt_url VARCHAR(255) NULL");
 });
-
 db.query("SHOW COLUMNS FROM admins LIKE 'role'", (err, results) => {
-    if (!err && results.length === 0) {
-        db.query("ALTER TABLE admins ADD COLUMN role ENUM('admin', 'manager', 'staff') NOT NULL DEFAULT 'admin'", (err) => {
-            if (err) console.error("Failed to add role column:", err);
-        });
-    }
+    if (!err && results.length === 0) db.query("ALTER TABLE admins ADD COLUMN role ENUM('admin', 'manager', 'staff') NOT NULL DEFAULT 'admin'");
 });
-
 db.query("SHOW COLUMNS FROM users LIKE 'google_id'", (err, results) => {
-    if (!err && results.length === 0) {
-        db.query("ALTER TABLE users ADD COLUMN google_id VARCHAR(255) NULL", (err) => {
-            if (err) console.error("Failed to add google_id column:", err);
-        });
-    }
+    if (!err && results.length === 0) db.query("ALTER TABLE users ADD COLUMN google_id VARCHAR(255) NULL");
 });
-
 db.query("SHOW COLUMNS FROM menu_items LIKE 'image_url'", (err, results) => {
-    if (!err && results.length === 0) {
-        db.query("ALTER TABLE menu_items ADD COLUMN image_url VARCHAR(255) NULL", (err) => {
-            if (err) console.error("Failed to add image_url column:", err);
-        });
-    }
+    if (!err && results.length === 0) db.query("ALTER TABLE menu_items ADD COLUMN image_url VARCHAR(255) NULL");
 });
 
 app.get('/', (req, res) => { res.send('Node.js Backend is running perfectly!'); });
@@ -103,14 +71,14 @@ async function logSystemActivity(type, description) {
     try {
         const pDb = db.promise();
         await pDb.query("INSERT INTO activity_logs (type, description) VALUES (?, ?)", [type, description]);
-    } catch (err) { console.error("Failed to log activity:", err); }
+    } catch (err) {}
 }
 
 async function createNotification(userId, message) {
     try {
         const pDb = db.promise();
         await pDb.query("INSERT INTO notifications (user_id, message) VALUES (?, ?)", [userId, message]);
-    } catch (err) { console.error("Failed to create notification:", err); }
+    } catch (err) {}
 }
 
 // =====================================
@@ -130,33 +98,18 @@ app.post('/register', async (req, res) => {
     db.query("INSERT INTO users (username, email, password, is_verified, email_verified, email_verification_token) VALUES (?, ?, ?, 0, 0, ?)", 
     [name, email, hashedPassword, otp], async (err, result) => {
       if (err) return res.status(500).json({ success: false, message: "Registration failed" });
-      
       try {
           const response = await fetch("https://api.brevo.com/v3/smtp/email", {
-              method: "POST",
-              headers: {
-                  "Content-Type": "application/json",
-                  "api-key": process.env.BREVO_API_KEY
-              },
+              method: "POST", headers: { "Content-Type": "application/json", "api-key": process.env.BREVO_API_KEY },
               body: JSON.stringify({
-                  sender: { name: "Mommy Rosal Catering", email: process.env.EMAIL_USER },
-                  to: [{ email: email }],
+                  sender: { name: "Mommy Rosal Catering", email: process.env.EMAIL_USER }, to: [{ email: email }],
                   subject: "Your Verification Code - Mommy Rosal Catering",
-                  htmlContent: `
-                    <div style="font-family: sans-serif; text-align: center; padding: 20px;">
-                        <h2>Welcome to Mommy Rosal's!</h2>
-                        <p>Your email verification code is:</p>
-                        <h1 style="color: #db2777; letter-spacing: 5px;">${otp}</h1>
-                        <p>Please enter this code in the app to activate your account.</p>
-                    </div>
-                  `
+                  htmlContent: `<div style="text-align: center; padding: 20px;"><h2>Welcome to Mommy Rosal's!</h2><p>Your email verification code is:</p><h1 style="color: #db2777; letter-spacing: 5px;">${otp}</h1></div>`
               })
           });
-
-          if (!response.ok) throw new Error("Failed to send email via API");
+          if (!response.ok) throw new Error("Failed to send email");
           res.json({ success: true, message: "OTP sent to your email. Please verify." });
       } catch (mailError) {
-          console.error("EMAIL SENDING ERROR:", mailError);
           db.query("DELETE FROM users WHERE id = ?", [result.insertId]);
           res.status(500).json({ success: false, message: "Failed to send OTP Email. Check your backend logs." });
       }
@@ -167,9 +120,7 @@ app.post('/register', async (req, res) => {
 app.post('/verify-otp', (req, res) => {
     const { email, otp } = req.body;
     db.query("SELECT id FROM users WHERE email = ? AND email_verification_token = ?", [email, otp], (err, results) => {
-        if (err) return res.status(500).json({ success: false, message: "Database error" });
         if (results.length === 0) return res.status(400).json({ success: false, message: "Invalid or expired OTP." });
-        
         db.query("UPDATE users SET email_verified = 1, email_verification_token = NULL WHERE id = ?", [results[0].id], (err) => {
             res.json({ success: true, message: "Email verified successfully! You can now log in." });
         });
@@ -181,9 +132,7 @@ app.post('/login', (req, res) => {
   if (!email || !password) return res.status(400).json({ success: false, message: "Missing credentials" });
   
   db.query("SELECT * FROM users WHERE email = ? OR username = ? LIMIT 1", [email, email], async (err, results) => {
-    if (err) return res.status(500).json({ success: false, message: "Database error" });
     if (results.length === 0) return res.status(400).json({ success: false, message: "No user found with that email or name" });
-    
     const user = results[0];
     const isMatch = await bcrypt.compare(password, user.password);
     
@@ -192,24 +141,14 @@ app.post('/login', (req, res) => {
           const otp = Math.floor(100000 + Math.random() * 900000).toString();
           db.query("UPDATE users SET email_verification_token = ? WHERE id = ?", [otp, user.id], async (updateErr) => {
               if (!updateErr) {
-                  try {
-                      await fetch("https://api.brevo.com/v3/smtp/email", {
-                          method: "POST",
-                          headers: { "Content-Type": "application/json", "api-key": process.env.BREVO_API_KEY },
-                          body: JSON.stringify({
-                              sender: { name: "Mommy Rosal Catering", email: process.env.EMAIL_USER },
-                              to: [{ email: user.email }], 
-                              subject: "Your Verification Code - Mommy Rosal Catering",
-                              htmlContent: `
-                                <div style="font-family: sans-serif; text-align: center; padding: 20px;">
-                                    <h2>Welcome back to Mommy Rosal's!</h2>
-                                    <p>Please verify your email to continue logging in. Your code is:</p>
-                                    <h1 style="color: #db2777; letter-spacing: 5px;">${otp}</h1>
-                                </div>
-                              `
-                          })
-                      });
-                  } catch (mailError) { console.error("FAILED TO SEND LOGIN OTP:", mailError); }
+                  fetch("https://api.brevo.com/v3/smtp/email", {
+                      method: "POST", headers: { "Content-Type": "application/json", "api-key": process.env.BREVO_API_KEY },
+                      body: JSON.stringify({
+                          sender: { name: "Mommy Rosal Catering", email: process.env.EMAIL_USER }, to: [{ email: user.email }], 
+                          subject: "Your Verification Code - Mommy Rosal Catering",
+                          htmlContent: `<div style="text-align: center; padding: 20px;"><h2>Welcome back to Mommy Rosal's!</h2><h1 style="color: #db2777;">${otp}</h1></div>`
+                      })
+                  }).catch(e => console.error(e));
               }
           });
           return res.status(403).json({ success: false, message: "Please verify your email address before logging in." });
@@ -224,7 +163,6 @@ app.post('/login', (req, res) => {
 app.post('/google-login', (req, res) => {
     const { email, name, googleId } = req.body;
     db.query("SELECT * FROM users WHERE email = ? LIMIT 1", [email], (err, results) => {
-        if (err) return res.status(500).json({ success: false, message: "Database error" });
         if (results.length > 0) {
             const user = results[0];
             if (!user.google_id) db.query("UPDATE users SET google_id = ?, email_verified = 1 WHERE id = ?", [googleId, user.id]);
@@ -232,7 +170,6 @@ app.post('/google-login', (req, res) => {
         } else {
             db.query("INSERT INTO users (username, email, password, is_verified, email_verified, google_id) VALUES (?, ?, '', 0, 1, ?)", 
             [name, email, googleId], (err, result) => {
-                if (err) return res.status(500).json({ success: false, message: "Google signup failed" });
                 res.json({ success: true, message: "Signup successful", user: { id: result.insertId, fullName: name, email, verified: false } });
             });
         }
@@ -243,7 +180,6 @@ app.post('/adminlogin', (req, res) => {
   const { username, password } = req.body;
   if (!username || !password) return res.status(400).json({ success: false, message: "Missing fields" });
   db.query("SELECT * FROM admins WHERE username = ?", [username], (err, results) => {
-    if (err) return res.status(500).json({ success: false, message: "Database error" });
     if (results.length === 0) return res.status(400).json({ success: false, message: "Admin not found" });
     const admin = results[0];
     if (password === admin.password) res.json({ success: true, message: "Login successful", admin: { id: admin.id, username: admin.username, role: admin.role || 'admin' } });
@@ -256,31 +192,19 @@ app.post('/forgot-password', (req, res) => {
     if (!email) return res.status(400).json({ success: false, message: "Email is required" });
 
     db.query("SELECT id FROM users WHERE email = ?", [email], (err, results) => {
-        if (err) return res.status(500).json({ success: false, message: "Database error" });
         if (results.length === 0) return res.status(400).json({ success: false, message: "Email not found" });
-
         const otp = Math.floor(100000 + Math.random() * 900000).toString();
 
         db.query("UPDATE users SET email_verification_token = ? WHERE email = ?", [otp, email], async (err) => {
-            if (err) return res.status(500).json({ success: false, message: "Failed to generate OTP" });
             try {
-                const response = await fetch("https://api.brevo.com/v3/smtp/email", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json", "api-key": process.env.BREVO_API_KEY },
+                await fetch("https://api.brevo.com/v3/smtp/email", {
+                    method: "POST", headers: { "Content-Type": "application/json", "api-key": process.env.BREVO_API_KEY },
                     body: JSON.stringify({
-                        sender: { name: "Mommy Rosal Catering", email: process.env.EMAIL_USER },
-                        to: [{ email: email }],
-                        subject: "Password Reset Code - Mommy Rosal Catering",
-                        htmlContent: `
-                          <div style="font-family: sans-serif; text-align: center; padding: 20px;">
-                              <h2>Password Reset Request</h2>
-                              <p>Your 6-digit password reset code is:</p>
-                              <h1 style="color: #db2777; letter-spacing: 5px;">${otp}</h1>
-                          </div>
-                        `
+                        sender: { name: "Mommy Rosal Catering", email: process.env.EMAIL_USER }, to: [{ email: email }],
+                        subject: "Password Reset Code",
+                        htmlContent: `<div style="text-align: center; padding: 20px;"><h2>Password Reset</h2><h1 style="color: #db2777;">${otp}</h1></div>`
                     })
                 });
-                if (!response.ok) throw new Error("Failed to send email");
                 res.json({ success: true, message: "A 6-digit code has been sent to your email." });
             } catch (error) { res.status(500).json({ success: false, message: "Failed to send reset email." }); }
         });
@@ -289,14 +213,10 @@ app.post('/forgot-password', (req, res) => {
 
 app.post('/reset-password', async (req, res) => {
     const { email, otp, newPassword } = req.body;
-    if (!email || !otp || !newPassword) return res.status(400).json({ success: false, message: "Missing required fields" });
-
     db.query("SELECT id FROM users WHERE email = ? AND email_verification_token = ?", [email, otp], async (err, results) => {
-        if (err) return res.status(500).json({ success: false, message: "Database error" });
         if (results.length === 0) return res.status(400).json({ success: false, message: "Invalid or expired 6-digit code." });
         const hashedPassword = await bcrypt.hash(newPassword, 10);
         db.query("UPDATE users SET password = ?, email_verification_token = NULL WHERE email = ?", [hashedPassword, email], (err) => {
-            if (err) return res.status(500).json({ success: false, message: "Failed to reset password" });
             res.json({ success: true, message: "Password reset successful! You can now log in." });
         });
     });
@@ -305,23 +225,13 @@ app.post('/reset-password', async (req, res) => {
 // =====================================
 // SYSTEM ROUTES
 // =====================================
-
 app.post('/verify', async (req, res) => {
   try {
     const { userId, idType, idNumber, lastName, firstName, address, phone, email, idImage } = req.body;
     if (!userId) return res.status(400).json({ success: false, message: "User ID is missing." });
-    if (!idImage) return res.status(400).json({ success: false, message: "ID image is required for upload." });
-
+    
     const pDb = db.promise();
-    const sql = `
-      INSERT INTO verification_requests 
-      (user_id, id_type, id_number, last_name, first_name, address, phone, email, id_image_path, status) 
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'Pending')
-      ON DUPLICATE KEY UPDATE 
-      id_type = VALUES(id_type), id_number = VALUES(id_number), last_name = VALUES(last_name),
-      first_name = VALUES(first_name), address = VALUES(address), phone = VALUES(phone),
-      email = VALUES(email), id_image_path = VALUES(id_image_path), status = 'Pending'
-    `;
+    const sql = `INSERT INTO verification_requests (user_id, id_type, id_number, last_name, first_name, address, phone, email, id_image_path, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'Pending') ON DUPLICATE KEY UPDATE id_type = VALUES(id_type), id_number = VALUES(id_number), last_name = VALUES(last_name), first_name = VALUES(first_name), address = VALUES(address), phone = VALUES(phone), email = VALUES(email), id_image_path = VALUES(id_image_path), status = 'Pending'`;
     await pDb.query(sql, [userId, idType, idNumber, lastName, firstName, address, phone || '', email || '', idImage]);
     await logSystemActivity('User', `Verification request submitted by ${firstName} ${lastName}`);
     res.json({ success: true, message: "Verification request submitted successfully!" });
@@ -330,63 +240,46 @@ app.post('/verify', async (req, res) => {
 
 app.post('/contact-message', async (req, res) => {
     const { name, email, message } = req.body;
-    if (!name || !email || !message) return res.status(400).json({ success: false, message: "All fields are required." });
     try {
-        const response = await fetch("https://api.brevo.com/v3/smtp/email", {
-            method: "POST",
-            headers: { "Content-Type": "application/json", "api-key": process.env.BREVO_API_KEY },
+        await fetch("https://api.brevo.com/v3/smtp/email", {
+            method: "POST", headers: { "Content-Type": "application/json", "api-key": process.env.BREVO_API_KEY },
             body: JSON.stringify({
-                sender: { name: "Website Contact Form", email: process.env.EMAIL_USER },
-                to: [{ email: process.env.EMAIL_USER }],
-                replyTo: { email: email, name: name }, 
-                subject: `New Website Inquiry from ${name}`,
-                htmlContent: `<div style="padding: 20px;"><h2>New Contact Form Message</h2><p><strong>Name:</strong> ${name}</p><p><strong>Email:</strong> ${email}</p><p><strong>Message:</strong></p><blockquote>${message}</blockquote></div>`
+                sender: { name: "Website Contact Form", email: process.env.EMAIL_USER }, to: [{ email: process.env.EMAIL_USER }],
+                replyTo: { email: email, name: name }, subject: `New Inquiry from ${name}`,
+                htmlContent: `<div style="padding: 20px;"><h2>New Contact Message</h2><p><strong>Name:</strong> ${name}</p><p><strong>Email:</strong> ${email}</p><blockquote>${message}</blockquote></div>`
             })
         });
-        if (!response.ok) throw new Error("Failed to send message via Brevo.");
         res.json({ success: true, message: "Your message has been sent successfully!" });
-    } catch (error) { res.status(500).json({ success: false, message: "Failed to send message. Please try again later." }); }
+    } catch (error) { res.status(500).json({ success: false, message: "Failed to send message." }); }
 });
 
 app.get('/fetch_notifications', (req, res) => {
-  const { userId } = req.query;
-  if (!userId) return res.status(400).json({ success: false, message: "User ID required" });
-  db.query("SELECT * FROM notifications WHERE user_id = ? ORDER BY created_at DESC", [userId], (err, results) => {
-    if (err) return res.status(500).json({ success: false, message: "Database error" });
+  db.query("SELECT * FROM notifications WHERE user_id = ? ORDER BY created_at DESC", [req.query.userId], (err, results) => {
     res.json({ success: true, notifications: results });
   });
 });
 
 app.post('/mark_notifications_read', (req, res) => {
-  const { userId } = req.body;
-  db.query("UPDATE notifications SET is_read = 1 WHERE user_id = ?", [userId], (err) => {
-    if (err) return res.status(500).json({ success: false, message: "Database error" });
+  db.query("UPDATE notifications SET is_read = 1 WHERE user_id = ?", [req.body.userId], (err) => {
     res.json({ success: true });
   });
 });
 
 app.post('/notify_chat_message', (req, res) => {
-  const { userId } = req.body;
-  createNotification(userId, "You have a new unread message from our support team.");
+  createNotification(req.body.userId, "You have a new unread message from our support team.");
   res.json({ success: true });
 });
 
 app.get('/fetch_booked_dates', (req, res) => {
   db.query("SELECT preferred_date, end_date FROM appointments WHERE status != 'Cancelled'", (err, results) => {
-    if (err) return res.status(500).json({ success: false, message: "Database error" });
-    
     let allBookedDates = new Set();
     results.forEach(row => {
         let curr = new Date(row.preferred_date);
         let end = row.end_date ? new Date(row.end_date) : new Date(row.preferred_date);
+        curr.setHours(0,0,0,0); end.setHours(0,0,0,0);
         
-        curr.setHours(0,0,0,0);
-        end.setHours(0,0,0,0);
-        
-        let bufferStart = new Date(curr);
-        bufferStart.setDate(bufferStart.getDate() - 3);
-        let bufferEnd = new Date(end);
-        bufferEnd.setDate(bufferEnd.getDate() + 3);
+        let bufferStart = new Date(curr); bufferStart.setDate(bufferStart.getDate() - 3);
+        let bufferEnd = new Date(end); bufferEnd.setDate(bufferEnd.getDate() + 3);
         
         let pointer = new Date(bufferStart);
         while (pointer <= bufferEnd) {
@@ -402,35 +295,27 @@ app.get('/fetch_booked_dates', (req, res) => {
 });
 
 app.get('/fetch_user_appointments', (req, res) => {
-  const userId = req.query.user_id; 
-  if (!userId) return res.status(400).json({ success: false, message: "User ID is required." });
-  const sql = `
-    SELECT a.id, a.event_type, a.package_type, a.preferred_date, a.end_date, a.event_time, a.event_location, a.guest_count, a.status, a.total_cost, a.selected_dishes, p.description as inclusions 
-    FROM appointments a LEFT JOIN packages p ON a.package_type = p.package_name
-    WHERE a.user_id = ? ORDER BY a.created_at DESC
-  `;
-  db.query(sql, [userId], (err, results) => {
-    if (err) return res.status(500).json({ success: false, message: "Error fetching appointments" });
+  const sql = `SELECT a.*, p.description as inclusions FROM appointments a LEFT JOIN packages p ON a.package_type = p.package_name WHERE a.user_id = ? ORDER BY a.created_at DESC`;
+  db.query(sql, [req.query.user_id], (err, results) => {
     res.json({ success: true, appointments: results });
   });
 });
 
 app.get('/fetch_user_payments', (req, res) => {
-  const userId = req.query.user_id; 
-  if (!userId) return res.status(400).json({ success: false, message: "User ID is required." });
   const sql = `SELECT p.id, p.amount_paid, p.payment_type, p.transaction_date, p.remarks, a.event_type FROM payments p JOIN appointments a ON p.appointment_id = a.id WHERE a.user_id = ? ORDER BY p.transaction_date DESC`;
-  db.query(sql, [userId], (err, results) => {
-    if (err) return res.status(500).json({ success: false, message: "Error fetching payments" });
+  db.query(sql, [req.query.user_id], (err, results) => {
     res.json({ success: true, payments: results });
   });
 });
 
-// NEW BOOK EVENT FLOW (Date/Time/Location -> Dishes)
+// =====================================
+// NEW BOOK EVENT FLOW (DYNAMIC INVENTORY)
+// =====================================
 app.post('/book_event', async (req, res) => {
-  const { userId, eventType, packageType, preferredDate, eventTime, eventLocation, duration, guestCount, selectedDishes, notes, totalCost } = req.body;
+  const { userId, eventType, serviceType, packageType, preferredDate, eventTime, eventLocation, duration, guestCount, selectedDishes, notes, totalCost } = req.body;
   
-  if (!userId || !eventType || !packageType || !preferredDate || !eventTime || !eventLocation || !guestCount || !selectedDishes) {
-    return res.status(400).json({ success: false, message: "All fields (including Time and Location) are required." });
+  if (!userId || !eventType || !serviceType || !packageType || !preferredDate || !eventTime || !eventLocation || !guestCount || !selectedDishes) {
+    return res.status(400).json({ success: false, message: "All fields are required." });
   }
 
   let endDate = preferredDate;
@@ -440,18 +325,31 @@ app.post('/book_event', async (req, res) => {
       endDate = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
   }
 
-  const inventoryNeedsPerGuest = { 'Chairs': 1, 'Plate': 1, 'Utensils - Spoon': 1, 'Utensils - Fork': 1, 'Glass': 1, 'Table Napkin': 1 };
-  const inventoryNeedsRatio = { 'Table (10 seater)': 10 };
   let requiredInventory = [];
-  for (const [item, itemsPerGuest] of Object.entries(inventoryNeedsPerGuest)) {
+
+  // 1. Food Service Items (EVERYONE gets plates, forks, spoons, glasses)
+  const foodServiceItems = { 'Plate': 1, 'Utensils - Spoon': 1, 'Utensils - Fork': 1, 'Glass': 1 };
+  for (const [item, itemsPerGuest] of Object.entries(foodServiceItems)) {
     const quantity = itemsPerGuest * guestCount;
     if (quantity > 0) requiredInventory.push(`${item}: ${quantity}`);
   }
-  for (const [item, ratio] of Object.entries(inventoryNeedsRatio)) {
-    const quantity = Math.ceil(guestCount / ratio);
-    if (quantity > 0) requiredInventory.push(`${item}: ${quantity}`);
+
+  // 2. Decor & Setup Items (ONLY if they selected 'Food and Decoration')
+  if (serviceType.includes('Decoration')) {
+      const decorItemsPerGuest = { 'Chairs': 1, 'Table Napkin': 1 };
+      const decorItemsRatio = { 'Table (10 seater)': 10 };
+      
+      for (const [item, itemsPerGuest] of Object.entries(decorItemsPerGuest)) {
+        const quantity = itemsPerGuest * guestCount;
+        if (quantity > 0) requiredInventory.push(`${item}: ${quantity}`);
+      }
+      for (const [item, ratio] of Object.entries(decorItemsRatio)) {
+        const quantity = Math.ceil(guestCount / ratio);
+        if (quantity > 0) requiredInventory.push(`${item}: ${quantity}`);
+      }
+      requiredInventory.push('Lights (assorted): 1');
   }
-  requiredInventory.push('Lights (assorted): 1');
+
   const requiredInventoryStr = requiredInventory.join('; ');
 
   try {
@@ -460,15 +358,11 @@ app.post('/book_event', async (req, res) => {
 
     if (!finalCost || isNaN(finalCost)) {
       const [pkgRows] = await pDb.query("SELECT price FROM packages WHERE package_name = ? LIMIT 1", [packageType]);
-      if (pkgRows.length > 0) {
-        finalCost = parseFloat(pkgRows[0].price);
-      } else {
-        finalCost = 0.00;
-      }
+      finalCost = pkgRows.length > 0 ? parseFloat(pkgRows[0].price) : 0.00;
     }
 
-    const sql = `INSERT INTO appointments (user_id, event_type, package_type, preferred_date, end_date, event_time, event_location, guest_count, selected_dishes, required_inventory, total_cost, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Pending')`;
-    const [result] = await pDb.query(sql, [userId, eventType, packageType, preferredDate, endDate, eventTime, eventLocation, guestCount, selectedDishes, requiredInventoryStr, finalCost]);
+    const sql = `INSERT INTO appointments (user_id, event_type, service_type, package_type, preferred_date, end_date, event_time, event_location, guest_count, selected_dishes, required_inventory, total_cost, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Pending')`;
+    const [result] = await pDb.query(sql, [userId, eventType, serviceType, packageType, preferredDate, endDate, eventTime, eventLocation, guestCount, selectedDishes, requiredInventoryStr, finalCost]);
     
     createNotification(userId, `Your booking for ${eventType} starting on ${preferredDate} has been received and is pending review.`);
     res.json({ success: true, message: "Event booking successful. We will contact you shortly!", booking_id: result.insertId });
@@ -477,14 +371,17 @@ app.post('/book_event', async (req, res) => {
   }
 });
 
+// =====================================
+// ADMIN & DASHBOARD ROUTES
+// =====================================
 app.get('/admin_fetch_dashboard_stats', async (req, res) => {
   try {
-    const promiseDb = db.promise();
-    const [[bookingsRow]] = await promiseDb.query("SELECT COUNT(*) as count FROM appointments WHERE status IN ('Pending', 'Confirmed')");
-    const [[revenueRow]] = await promiseDb.query("SELECT SUM(amount_paid) as total FROM payments");
-    const [[menuRow]] = await promiseDb.query("SELECT COUNT(*) as count FROM menu_items");
-    const [[userRow]] = await promiseDb.query("SELECT COUNT(*) as count FROM users WHERE is_verified = 1");
-    const [events] = await promiseDb.query("SELECT id, event_type, preferred_date, end_date, guest_count, status FROM appointments WHERE status IN ('Pending', 'Confirmed') ORDER BY preferred_date ASC");
+    const pDb = db.promise();
+    const [[bookingsRow]] = await pDb.query("SELECT COUNT(*) as count FROM appointments WHERE status IN ('Pending', 'Confirmed')");
+    const [[revenueRow]] = await pDb.query("SELECT SUM(amount_paid) as total FROM payments");
+    const [[menuRow]] = await pDb.query("SELECT COUNT(*) as count FROM menu_items");
+    const [[userRow]] = await pDb.query("SELECT COUNT(*) as count FROM users WHERE is_verified = 1");
+    const [events] = await pDb.query("SELECT id, event_type, preferred_date, end_date, guest_count, status FROM appointments WHERE status IN ('Pending', 'Confirmed') ORDER BY preferred_date ASC");
     res.json({ success: true, stats: { bookings: bookingsRow?.count || 0, revenue: revenueRow?.total || 0, menuItems: menuRow?.count || 0, customers: userRow?.count || 0 }, upcomingEvents: events });
   } catch (err) { res.status(500).json({ success: false, message: "Database error fetching stats" }); }
 });
@@ -492,7 +389,6 @@ app.get('/admin_fetch_dashboard_stats', async (req, res) => {
 app.get('/admin_fetch_bookings', (req, res) => {
   const sql = `SELECT a.*, u.username as customer_name, u.email as customer_email, COALESCE(SUM(p.amount_paid), 0) as amount_paid, (a.total_cost - COALESCE(SUM(p.amount_paid), 0)) as balance FROM appointments a LEFT JOIN users u ON a.user_id = u.id LEFT JOIN payments p ON a.id = p.appointment_id GROUP BY a.id, u.username, u.email ORDER BY a.created_at DESC`;
   db.query(sql, (err, results) => {
-    if (err) return res.status(500).json({ success: false, message: "Database error" });
     const formattedBookings = results.map(row => ({ ...row, customer_name: row.customer_name || `Unknown User`, customer_email: row.customer_email || "N/A", total_cost: parseFloat(row.total_cost) || 0, amount_paid: parseFloat(row.amount_paid) || 0, balance: parseFloat(row.balance) || 0 }));
     res.json({ success: true, bookings: formattedBookings });
   });
@@ -500,8 +396,6 @@ app.get('/admin_fetch_bookings', (req, res) => {
 
 app.post('/admin_update_booking_status', async (req, res) => {
   const { bookingId, status } = req.body;
-  if (!bookingId || !status) return res.status(400).json({ success: false, message: "Missing data" });
-
   try {
     const pDb = db.promise();
     const [rows] = await pDb.query(`SELECT a.user_id, a.package_type, a.required_inventory, a.status, a.event_type, a.preferred_date, a.total_cost, u.username FROM appointments a LEFT JOIN users u ON a.user_id = u.id WHERE a.id = ?`, [bookingId]);
@@ -526,48 +420,31 @@ app.post('/admin_update_booking_status', async (req, res) => {
         const [pkg] = await pDb.query("SELECT price FROM packages WHERE package_name = ? LIMIT 1", [booking.package_type]);
         costToSet = pkg.length > 0 ? parseFloat(pkg[0].price) : 30000.00;
       }
-
       await pDb.query("UPDATE appointments SET status = ?, total_cost = ? WHERE id = ?", [status, costToSet, bookingId]);
     } else {
       await pDb.query("UPDATE appointments SET status = ? WHERE id = ?", [status, bookingId]);
     }
 
-    if (typeof createNotification === 'function') await createNotification(booking.user_id, `Your ${booking.event_type} event booking status is now: ${status}.`);
-
-    const clientName = booking.username || 'Unknown Client';
-    const dateObj = new Date(booking.preferred_date);
-    const formattedDate = !booking.preferred_date || isNaN(dateObj.getTime()) ? 'Unknown Date' : dateObj.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
-    const logMessage = `Updated booking to "${status}" for ${clientName} (${booking.event_type} on ${formattedDate})`;
-    await logSystemActivity('Booking', logMessage);
+    await createNotification(booking.user_id, `Your ${booking.event_type} event booking status is now: ${status}.`);
+    await logSystemActivity('Booking', `Updated booking #${bookingId} to ${status}`);
     res.json({ success: true, message: `Booking #${bookingId} status successfully updated to ${status}.` });
-  } catch (err) {
-    res.status(500).json({ success: false, message: "Error updating status." });
-  }
+  } catch (err) { res.status(500).json({ success: false, message: "Error updating status." }); }
 });
 
 app.post('/admin_reconcile_booking', async (req, res) => {
   const { bookingId, damagedItems = {} } = req.body; 
-  if (!bookingId) return res.status(400).json({ success: false, message: "Missing booking ID" });
-
   try {
     const pDb = db.promise();
     const [rows] = await pDb.query("SELECT user_id, required_inventory, status FROM appointments WHERE id = ?", [bookingId]);
-    if (rows.length === 0) return res.status(404).json({ success: false, message: "Booking not found in database." });
-    
     const booking = rows[0];
-
-    if (booking.status === 'Completed') {
-        return res.status(400).json({ success: false, message: "This booking has already been reconciled and completed." });
-    }
+    if (booking.status === 'Completed') return res.status(400).json({ success: false, message: "This booking has already been reconciled." });
     
     if (booking.required_inventory) {
       const items = booking.required_inventory.split('; ');
       for (let itemStr of items) {
         if (!itemStr || !itemStr.includes(':')) continue; 
         const [itemName, allocatedQtyStr] = itemStr.split(': ');
-        const allocatedQty = parseInt(allocatedQtyStr, 10) || 0;
-        const damagedQty = parseInt(damagedItems[itemName], 10) || 0;
-        const returnQty = allocatedQty - damagedQty;
+        const returnQty = (parseInt(allocatedQtyStr, 10) || 0) - (parseInt(damagedItems[itemName], 10) || 0);
         
         if (returnQty > 0 && itemName) {
           const cleanItemName = itemName.trim();
@@ -578,46 +455,28 @@ app.post('/admin_reconcile_booking', async (req, res) => {
     }
     
     await pDb.query("UPDATE appointments SET status = 'Completed' WHERE id = ?", [bookingId]);
-    if (typeof createNotification === 'function') await createNotification(booking.user_id, `Your booking #${bookingId} has been successfully completed. Thank you!`);
+    await createNotification(booking.user_id, `Your booking #${bookingId} has been successfully completed. Thank you!`);
     await logSystemActivity('Booking', `Reconciled and Completed Booking #${bookingId}`);
-    
     res.json({ success: true, message: "Event completed and inventory successfully reconciled!" });
-  } catch (err) {
-    res.status(500).json({ success: false, message: "Server error: " + err.message });
-  }
+  } catch (err) { res.status(500).json({ success: false, message: "Server error" }); }
 });
 
 app.post('/admin_delete_booking', async (req, res) => {
   const id = req.body.id || req.body.bookingId || req.params.id;
-  if (!id) return res.status(400).json({ success: false, message: "Missing ID" });
   try {
     const pDb = db.promise();
-    const [bookingInfo] = await pDb.query(`SELECT a.event_type, a.preferred_date, u.username FROM appointments a LEFT JOIN users u ON a.user_id = u.id WHERE a.id = ?`, [id]);
-    let logMessage = `Deleted booking ID ${id}`;
-    if (bookingInfo.length > 0) {
-        const { event_type, preferred_date, username } = bookingInfo[0];
-        const clientName = username || 'Unknown Client';
-        const dateObj = new Date(preferred_date);
-        const formattedDate = !preferred_date || isNaN(dateObj.getTime()) ? 'Unknown Date' : dateObj.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
-        logMessage = `Deleted booking for ${clientName} (${event_type} on ${formattedDate})`;
-    }
     await pDb.query('DELETE FROM appointments WHERE id = ?', [id]);
-    await logSystemActivity('Booking', logMessage);
+    await logSystemActivity('Booking', `Deleted booking ID ${id}`);
     res.json({ success: true, message: 'Booking deleted' });
-  } catch (err) {
-    res.status(500).json({ success: false, message: 'Server error' });
-  }
+  } catch (err) { res.status(500).json({ success: false, message: 'Server error' }); }
 });
 
 app.get('/admin_fetch_inventory', (req, res) => { db.query("SELECT * FROM inventory", (err, r) => { res.json({ success: true, inventory: r }); }); });
 app.get('/admin_fetch_inventory_logs', (req, res) => { db.query("SELECT * FROM inventory_logs ORDER BY created_at DESC", (err, results) => { res.json({ success: true, logs: results }); }); });
 app.post('/admin_add_inventory', (req, res) => {
-    db.query("SELECT id FROM inventory WHERE name = ?", [req.body.name], (err, results) => {
-        if (results.length > 0) return res.status(400).json({ success: false, message: "An item with this name already exists!" });
-        db.query("INSERT INTO inventory (name, quantity, unit) VALUES (?, ?, ?)", [req.body.name, req.body.quantity, req.body.unit], async (err) => {
-            await logSystemActivity('Inventory', `Added new inventory item: ${req.body.name}`);
-            res.json({ success: true });
-        });
+    db.query("INSERT INTO inventory (name, quantity, unit) VALUES (?, ?, ?)", [req.body.name, req.body.quantity, req.body.unit], async (err) => {
+        await logSystemActivity('Inventory', `Added new inventory item: ${req.body.name}`);
+        res.json({ success: true });
     });
 });
 app.post('/admin_update_inventory', (req, res) => {
@@ -627,103 +486,32 @@ app.post('/admin_update_inventory', (req, res) => {
     });
 });
 app.post('/admin_delete_inventory', async (req, res) => {
-  const id = req.body.id || req.params.id; 
-  if (!id) return res.status(400).json({ success: false, message: "Missing ID" });
-  try {
-    const pDb = db.promise();
-    const [item] = await pDb.query('SELECT name FROM inventory WHERE id = ?', [id]);
-    const itemName = item.length > 0 ? item[0].name : `Item ID ${id}`;
-    await pDb.query('DELETE FROM inventory WHERE id = ?', [id]);
-    await logSystemActivity('Inventory', `Deleted inventory item: ${itemName}`);
-    res.json({ success: true, message: 'Inventory item deleted' });
-  } catch (err) { res.status(500).json({ success: false, message: 'Server error' }); }
+    db.query('DELETE FROM inventory WHERE id = ?', [req.body.id || req.params.id], () => res.json({ success: true, message: 'Inventory item deleted' }));
 });
-
 app.post('/admin_delete_inventory_logs', async (req, res) => {
-  const { logIds } = req.body;
-  if (!logIds || !Array.isArray(logIds) || logIds.length === 0) {
-      return res.status(400).json({ success: false, message: "No logs selected" });
-  }
-  try {
-      const pDb = db.promise();
-      await pDb.query('DELETE FROM inventory_logs WHERE id IN (?)', [logIds]);
-      res.json({ success: true, message: 'Logs deleted successfully' });
-  } catch (err) { 
-      res.status(500).json({ success: false, message: 'Server error' }); 
-  }
+    db.query('DELETE FROM inventory_logs WHERE id IN (?)', [req.body.logIds], () => res.json({ success: true, message: 'Logs deleted successfully' }));
 });
 
-// =====================================
-// ADMIN MENU ROUTES
-// =====================================
-app.get('/admin_fetch_menu', (req, res) => { 
-    db.query("SELECT * FROM menu_items", (err, r) => { res.json({ success: true, items: r }); }); 
-});
-
+app.get('/admin_fetch_menu', (req, res) => { db.query("SELECT * FROM menu_items", (err, r) => { res.json({ success: true, items: r }); }); });
 app.post('/admin_add_menu', (req, res) => {
-    const { name, category, price, description, image_url } = req.body;
-    db.query("SELECT id FROM menu_items WHERE name = ?", [name], (err, results) => {
-        if (results && results.length > 0) return res.status(400).json({ success: false, message: "A menu dish with this name already exists!" });
-        db.query("INSERT INTO menu_items (name, category, price, description, image_url) VALUES (?, ?, ?, ?, ?)", 
-        [name, category, price, description, image_url], async (err) => {
-            if (err) return res.status(500).json({ success: false, message: "Database error" });
-            await logSystemActivity('Menu', `Added new menu item: ${name}`);
-            res.json({ success: true });
-        });
-    });
+    db.query("INSERT INTO menu_items (name, category, price, description, image_url) VALUES (?, ?, ?, ?, ?)", [req.body.name, req.body.category, req.body.price, req.body.description, req.body.image_url], () => res.json({ success: true }));
 });
-
 app.post('/admin_update_menu', (req, res) => {
-    const { id, name, category, price, description, image_url } = req.body;
-    db.query("UPDATE menu_items SET name=?, category=?, price=?, description=?, image_url=? WHERE id=?", 
-    [name, category, price, description, image_url, id], async (err) => {
-        if (err) return res.status(500).json({ success: false, message: "Database error" });
-        await logSystemActivity('Menu', `Updated menu item: ${name}`);
-        res.json({ success: true });
-    });
+    db.query("UPDATE menu_items SET name=?, category=?, price=?, description=?, image_url=? WHERE id=?", [req.body.name, req.body.category, req.body.price, req.body.description, req.body.image_url, req.body.id], () => res.json({ success: true }));
 });
-
 app.post('/admin_delete_menu', async (req, res) => {
-  const id = req.body.id || req.params.id;
-  try {
-    const pDb = db.promise();
-    const [dish] = await pDb.query('SELECT name FROM menu_items WHERE id = ?', [id]);
-    const dishName = dish.length > 0 ? dish[0].name : `Dish ID ${id}`;
-    await pDb.query('DELETE FROM menu_items WHERE id = ?', [id]);
-    await logSystemActivity('Menu', `Deleted menu item: ${dishName}`);
-    res.json({ success: true, message: 'Menu item deleted' });
-  } catch (err) { res.status(500).json({ success: false, message: 'Server error' }); }
+    db.query('DELETE FROM menu_items WHERE id = ?', [req.body.id || req.params.id], () => res.json({ success: true, message: 'Menu item deleted' }));
 });
 
 app.get('/admin_fetch_staff', (req, res) => { db.query("SELECT * FROM staff", (err, r) => { res.json({ success: true, staff: r }); }); });
 app.post('/admin_add_staff', (req, res) => { db.query("INSERT INTO staff (name, role, email, phone) VALUES (?, ?, ?, ?)", [req.body.name, req.body.role, req.body.email, req.body.phone], () => { res.json({ success: true }); }); });
 app.post('/admin_update_staff', (req, res) => { db.query("UPDATE staff SET name=?, role=?, email=?, phone=? WHERE id=?", [req.body.name, req.body.role, req.body.email, req.body.phone, req.body.id], () => { res.json({ success: true }); }); });
-app.post('/admin_delete_staff', async (req, res) => {
-    const id = req.body.id || req.params.id;
-    try {
-        const pDb = db.promise();
-        const [staff] = await pDb.query('SELECT name FROM staff WHERE id = ?', [id]);
-        res.json({ success: true });
-        await pDb.query("DELETE FROM staff WHERE id = ?", [id]);
-        await logSystemActivity('Staff', `Deleted staff member: ${staff.length > 0 ? staff[0].name : `Staff ID \${id}`}`);
-    } catch (err) { res.status(500).json({ success: false }); }
-});
+app.post('/admin_delete_staff', async (req, res) => { db.query("DELETE FROM staff WHERE id = ?", [req.body.id || req.params.id], () => res.json({ success: true })); });
 
 app.get('/admin_fetch_all_payments', (req, res) => { db.query(`SELECT p.*, a.event_type, u.username as customer_name FROM payments p LEFT JOIN appointments a ON p.appointment_id = a.id LEFT JOIN users u ON a.user_id = u.id ORDER BY p.transaction_date DESC`, (err, results) => { res.json({ success: true, payments: results }); }); });
 app.get('/admin_fetch_payment_history', (req, res) => { db.query("SELECT * FROM payments WHERE appointment_id = ? ORDER BY transaction_date DESC", [req.query.appointmentId], (err, r) => { res.json({ success: true, history: r }); }); });
-
 app.post('/admin_process_payment', async (req, res) => {
-  const { appointmentId, amount, paymentType, remarks, receiptImage } = req.body;
-  if (!appointmentId || !amount) return res.status(400).json({ success: false, message: "Appointment ID and Amount are required." });
-
-  try {
-      const pDb = db.promise();
-      await pDb.query("INSERT INTO payments (appointment_id, amount_paid, payment_type, remarks, transaction_date, receipt_url) VALUES (?, ?, ?, ?, NOW(), ?)", [appointmentId, amount, paymentType || 'Cash', remarks || '', receiptImage]);
-      await logSystemActivity('Payment', `Processed payment of ₱${amount} for Booking #${appointmentId}`);
-      res.json({ success: true, message: "Payment recorded successfully" });
-  } catch (err) { 
-      res.status(500).json({ success: false, message: "Database error: " + err.message }); 
-  }
+  db.query("INSERT INTO payments (appointment_id, amount_paid, payment_type, remarks, transaction_date, receipt_url) VALUES (?, ?, ?, ?, NOW(), ?)", [req.body.appointmentId, req.body.amount, req.body.paymentType || 'Cash', req.body.remarks || '', req.body.receiptImage], () => res.json({ success: true, message: "Payment recorded successfully" }));
 });
 
 app.get('/admin_fetch_users', (req, res) => { db.query("SELECT id, username, email, is_verified, created_at FROM users ORDER BY created_at DESC", (err, results) => { res.json({ success: true, users: results }); }); });
@@ -735,104 +523,20 @@ app.get('/admin_fetch_activity_logs', (req, res) => {
 app.get('/admin_fetch_reports', async (req, res) => {
   try {
     const pDb = db.promise();
-    
-    // 1. Financial & Operational Summary
     const [[rev]] = await pDb.query("SELECT COALESCE(SUM(amount_paid), 0) as total_rev FROM payments");
-    const [[bookings]] = await pDb.query(`
-      SELECT 
-        COUNT(*) as total_events,
-        COALESCE(SUM(guest_count), 0) as total_guests_served,
-        SUM(CASE WHEN status = 'Completed' THEN 1 ELSE 0 END) as completed_events,
-        SUM(CASE WHEN status = 'Confirmed' THEN 1 ELSE 0 END) as upcoming_events,
-        SUM(CASE WHEN status = 'Pending' THEN 1 ELSE 0 END) as pending_events
-      FROM appointments
-    `);
-    
-    // 2. Events breakdown
-    const [eventsByType] = await pDb.query(`
-      SELECT event_type, COUNT(*) as count, COALESCE(SUM(guest_count), 0) as total_guests
-      FROM appointments 
-      GROUP BY event_type
-      ORDER BY count DESC
-    `);
+    const [[bookings]] = await pDb.query(`SELECT COUNT(*) as total_events, COALESCE(SUM(guest_count), 0) as total_guests_served, SUM(CASE WHEN status = 'Completed' THEN 1 ELSE 0 END) as completed_events, SUM(CASE WHEN status = 'Confirmed' THEN 1 ELSE 0 END) as upcoming_events, SUM(CASE WHEN status = 'Pending' THEN 1 ELSE 0 END) as pending_events FROM appointments`);
+    const [eventsByType] = await pDb.query(`SELECT event_type, COUNT(*) as count, COALESCE(SUM(guest_count), 0) as total_guests FROM appointments GROUP BY event_type ORDER BY count DESC`);
+    const [inventoryAlerts] = await pDb.query(`SELECT name, quantity, unit FROM inventory WHERE quantity <= 20 ORDER BY quantity ASC`);
+    const [recentCateringOrders] = await pDb.query(`SELECT a.id, a.event_type, a.preferred_date, a.end_date, a.guest_count, a.status, a.total_cost, u.username as client_name FROM appointments a LEFT JOIN users u ON a.user_id = u.id ORDER BY a.preferred_date DESC LIMIT 6`);
 
-    // 3. Catering Inventory Stock Status
-    const [inventoryAlerts] = await pDb.query(`
-      SELECT name, quantity, unit 
-      FROM inventory 
-      WHERE quantity <= 20 
-      ORDER BY quantity ASC
-    `);
-
-    // 4. Recent Order Log
-    const [recentCateringOrders] = await pDb.query(`
-      SELECT 
-        a.id, 
-        a.event_type, 
-        a.preferred_date, 
-        a.end_date,
-        a.guest_count, 
-        a.status, 
-        a.total_cost,
-        u.username as client_name
-      FROM appointments a
-      LEFT JOIN users u ON a.user_id = u.id
-      ORDER BY a.preferred_date DESC
-      LIMIT 6
-    `);
-
-    res.json({ 
-      success: true, 
-      summary: { 
-        revenue: rev.total_rev || 0,
-        total_events: bookings.total_events || 0,
-        total_guests_served: bookings.total_guests_served || 0,
-        completed_events: bookings.completed_events || 0,
-        upcoming_events: bookings.upcoming_events || 0,
-        pending_events: bookings.pending_events || 0
-      }, 
-      eventsByType,
-      inventoryAlerts,
-      recentCateringOrders
-    });
-  } catch (e) { 
-    res.status(500).json({ success: false, message: "Error generating reports: " + e.message }); 
-  }
+    res.json({ success: true, summary: { revenue: rev.total_rev || 0, total_events: bookings.total_events || 0, total_guests_served: bookings.total_guests_served || 0, completed_events: bookings.completed_events || 0, upcoming_events: bookings.upcoming_events || 0, pending_events: bookings.pending_events || 0 }, eventsByType, inventoryAlerts, recentCateringOrders });
+  } catch (e) { res.status(500).json({ success: false, message: "Error generating reports: " + e.message }); }
 });
 
-app.get('/fetch_packages', (req, res) => {
-    const sql = "SELECT * FROM packages";
-    db.query(sql, (err, results) => {
-        if (err) return res.status(500).json({ success: false, message: "Database error" });
-        res.json({ success: true, packages: results });
-    });
-});
-
-app.post('/admin_add_package', (req, res) => {
-    const { package_name, description, price, pax_capacity, dish_limit, physical_assets } = req.body;
-    const sql = "INSERT INTO packages (package_name, description, price, pax_capacity, dish_limit, physical_assets) VALUES (?, ?, ?, ?, ?, ?)";
-    db.query(sql, [package_name, description, price, pax_capacity, dish_limit, physical_assets], (err) => {
-        if (err) return res.status(500).json({ success: false, message: "Database error", error: err });
-        res.json({ success: true, message: "Package added successfully" });
-    });
-});
-
-app.post('/admin_update_package', (req, res) => {
-    const { id, package_name, description, price, pax_capacity, dish_limit, physical_assets } = req.body;
-    const sql = "UPDATE packages SET package_name=?, description=?, price=?, pax_capacity=?, dish_limit=?, physical_assets=? WHERE id=?";
-    db.query(sql, [package_name, description, price, pax_capacity, dish_limit, physical_assets, id], (err) => {
-        if (err) return res.status(500).json({ success: false, message: "Database error", error: err });
-        res.json({ success: true, message: "Package updated successfully" });
-    });
-});
-
-app.post('/admin_delete_package', (req, res) => {
-    const { id } = req.body;
-    db.query("DELETE FROM packages WHERE id=?", [id], (err) => {
-        if (err) return res.status(500).json({ success: false, message: "Database error" });
-        res.json({ success: true, message: "Package deleted successfully" });
-    });
-});
+app.get('/fetch_packages', (req, res) => { db.query("SELECT * FROM packages", (err, results) => { res.json({ success: true, packages: results }); }); });
+app.post('/admin_add_package', (req, res) => { db.query("INSERT INTO packages (package_name, description, price, pax_capacity, dish_limit, physical_assets) VALUES (?, ?, ?, ?, ?, ?)", [req.body.package_name, req.body.description, req.body.price, req.body.pax_capacity, req.body.dish_limit, req.body.physical_assets], () => res.json({ success: true, message: "Package added successfully" })); });
+app.post('/admin_update_package', (req, res) => { db.query("UPDATE packages SET package_name=?, description=?, price=?, pax_capacity=?, dish_limit=?, physical_assets=? WHERE id=?", [req.body.package_name, req.body.description, req.body.price, req.body.pax_capacity, req.body.dish_limit, req.body.physical_assets, req.body.id], () => res.json({ success: true, message: "Package updated successfully" })); });
+app.post('/admin_delete_package', (req, res) => { db.query("DELETE FROM packages WHERE id=?", [req.body.id], () => res.json({ success: true, message: "Package deleted successfully" })); });
 
 app.get('/admin_fetch_verification', (req, res) => { db.query("SELECT * FROM verification_requests WHERE status = 'Pending'", (err, r) => { res.json({ success: true, requests: r }); }); });
 app.post('/admin_verify_user', (req, res) => {
