@@ -12,7 +12,6 @@ const PORT = process.env.PORT || 5000;
 app.use(cors());
 app.use(express.json());
 
-// Serve uploaded files statically (for Verification & Payments)
 app.use('/uploads', express.static('uploads'));
 if (!fs.existsSync('uploads')) {
     fs.mkdirSync('uploads');
@@ -38,7 +37,6 @@ const db = mysql.createPool({
 // =====================================
 // DATABASE AUTO-UPGRADES
 // =====================================
-
 db.query("SHOW COLUMNS FROM packages LIKE 'physical_assets'", (err, results) => {
     if (!err && results.length === 0) {
         db.query("ALTER TABLE packages ADD COLUMN physical_assets TEXT NULL", (err) => {
@@ -52,6 +50,18 @@ db.query("SHOW COLUMNS FROM appointments LIKE 'end_date'", (err, results) => {
         db.query("ALTER TABLE appointments ADD COLUMN end_date DATE NULL AFTER preferred_date", (err) => {
             if (err) console.error("Failed to add end_date column:", err);
         });
+    }
+});
+
+db.query("SHOW COLUMNS FROM appointments LIKE 'event_time'", (err, results) => {
+    if (!err && results.length === 0) {
+        db.query("ALTER TABLE appointments ADD COLUMN event_time VARCHAR(50) NULL AFTER end_date");
+    }
+});
+
+db.query("SHOW COLUMNS FROM appointments LIKE 'event_location'", (err, results) => {
+    if (!err && results.length === 0) {
+        db.query("ALTER TABLE appointments ADD COLUMN event_location VARCHAR(255) NULL AFTER event_time");
     }
 });
 
@@ -106,7 +116,6 @@ async function createNotification(userId, message) {
 // =====================================
 // AUTHENTICATION ROUTES
 // =====================================
-
 app.post('/register', async (req, res) => {
   const { name, email, password } = req.body;
   if (!name || !email || !password) return res.status(400).json({ success: false, message: "Missing required fields" });
@@ -144,11 +153,7 @@ app.post('/register', async (req, res) => {
               })
           });
 
-          if (!response.ok) {
-              const errorData = await response.json();
-              throw new Error(errorData.message || "Failed to send email via API");
-          }
-
+          if (!response.ok) throw new Error("Failed to send email via API");
           res.json({ success: true, message: "OTP sent to your email. Please verify." });
       } catch (mailError) {
           console.error("EMAIL SENDING ERROR:", mailError);
@@ -184,22 +189,16 @@ app.post('/login', (req, res) => {
     
     if (isMatch) {
       if (user.email_verified === 0) {
-          // --- FIX FOR LEGACY ACCOUNTS & RESEND OTP ---
-          // Generate a new OTP and send it if they try to log in while unverified
           const otp = Math.floor(100000 + Math.random() * 900000).toString();
-          
           db.query("UPDATE users SET email_verification_token = ? WHERE id = ?", [otp, user.id], async (updateErr) => {
               if (!updateErr) {
                   try {
                       await fetch("https://api.brevo.com/v3/smtp/email", {
                           method: "POST",
-                          headers: {
-                              "Content-Type": "application/json",
-                              "api-key": process.env.BREVO_API_KEY
-                          },
+                          headers: { "Content-Type": "application/json", "api-key": process.env.BREVO_API_KEY },
                           body: JSON.stringify({
                               sender: { name: "Mommy Rosal Catering", email: process.env.EMAIL_USER },
-                              to: [{ email: user.email }], // Use user.email in case they logged in with username
+                              to: [{ email: user.email }], 
                               subject: "Your Verification Code - Mommy Rosal Catering",
                               htmlContent: `
                                 <div style="font-family: sans-serif; text-align: center; padding: 20px;">
@@ -210,12 +209,9 @@ app.post('/login', (req, res) => {
                               `
                           })
                       });
-                  } catch (mailError) {
-                      console.error("FAILED TO SEND LOGIN OTP:", mailError);
-                  }
+                  } catch (mailError) { console.error("FAILED TO SEND LOGIN OTP:", mailError); }
               }
           });
-
           return res.status(403).json({ success: false, message: "Please verify your email address before logging in." });
       }
       res.json({ success: true, message: "Login successful", user: { id: user.id, fullName: user.username, email: user.email, verified: Boolean(user.is_verified) } });
@@ -227,15 +223,11 @@ app.post('/login', (req, res) => {
 
 app.post('/google-login', (req, res) => {
     const { email, name, googleId } = req.body;
-    
     db.query("SELECT * FROM users WHERE email = ? LIMIT 1", [email], (err, results) => {
         if (err) return res.status(500).json({ success: false, message: "Database error" });
-        
         if (results.length > 0) {
             const user = results[0];
-            if (!user.google_id) {
-                db.query("UPDATE users SET google_id = ?, email_verified = 1 WHERE id = ?", [googleId, user.id]);
-            }
+            if (!user.google_id) db.query("UPDATE users SET google_id = ?, email_verified = 1 WHERE id = ?", [googleId, user.id]);
             res.json({ success: true, message: "Login successful", user: { id: user.id, fullName: user.username, email: user.email, verified: Boolean(user.is_verified) } });
         } else {
             db.query("INSERT INTO users (username, email, password, is_verified, email_verified, google_id) VALUES (?, ?, '', 0, 1, ?)", 
@@ -271,14 +263,10 @@ app.post('/forgot-password', (req, res) => {
 
         db.query("UPDATE users SET email_verification_token = ? WHERE email = ?", [otp, email], async (err) => {
             if (err) return res.status(500).json({ success: false, message: "Failed to generate OTP" });
-
             try {
                 const response = await fetch("https://api.brevo.com/v3/smtp/email", {
                     method: "POST",
-                    headers: {
-                        "Content-Type": "application/json",
-                        "api-key": process.env.BREVO_API_KEY
-                    },
+                    headers: { "Content-Type": "application/json", "api-key": process.env.BREVO_API_KEY },
                     body: JSON.stringify({
                         sender: { name: "Mommy Rosal Catering", email: process.env.EMAIL_USER },
                         to: [{ email: email }],
@@ -288,18 +276,13 @@ app.post('/forgot-password', (req, res) => {
                               <h2>Password Reset Request</h2>
                               <p>Your 6-digit password reset code is:</p>
                               <h1 style="color: #db2777; letter-spacing: 5px;">${otp}</h1>
-                              <p>If you did not request this, please ignore this email.</p>
                           </div>
                         `
                     })
                 });
-
                 if (!response.ok) throw new Error("Failed to send email");
                 res.json({ success: true, message: "A 6-digit code has been sent to your email." });
-            } catch (error) {
-                console.error(error);
-                res.status(500).json({ success: false, message: "Failed to send reset email." });
-            }
+            } catch (error) { res.status(500).json({ success: false, message: "Failed to send reset email." }); }
         });
     });
 });
@@ -311,9 +294,7 @@ app.post('/reset-password', async (req, res) => {
     db.query("SELECT id FROM users WHERE email = ? AND email_verification_token = ?", [email, otp], async (err, results) => {
         if (err) return res.status(500).json({ success: false, message: "Database error" });
         if (results.length === 0) return res.status(400).json({ success: false, message: "Invalid or expired 6-digit code." });
-
         const hashedPassword = await bcrypt.hash(newPassword, 10);
-
         db.query("UPDATE users SET password = ?, email_verification_token = NULL WHERE email = ?", [hashedPassword, email], (err) => {
             if (err) return res.status(500).json({ success: false, message: "Failed to reset password" });
             res.json({ success: true, message: "Password reset successful! You can now log in." });
@@ -327,14 +308,11 @@ app.post('/reset-password', async (req, res) => {
 
 app.post('/verify', async (req, res) => {
   try {
-    // Note: We now extract idImage directly from req.body instead of relying on multer's req.file
     const { userId, idType, idNumber, lastName, firstName, address, phone, email, idImage } = req.body;
-    
     if (!userId) return res.status(400).json({ success: false, message: "User ID is missing." });
     if (!idImage) return res.status(400).json({ success: false, message: "ID image is required for upload." });
 
     const pDb = db.promise();
-    
     const sql = `
       INSERT INTO verification_requests 
       (user_id, id_type, id_number, last_name, first_name, address, phone, email, id_image_path, status) 
@@ -344,61 +322,30 @@ app.post('/verify', async (req, res) => {
       first_name = VALUES(first_name), address = VALUES(address), phone = VALUES(phone),
       email = VALUES(email), id_image_path = VALUES(id_image_path), status = 'Pending'
     `;
-
-    // Save the Cloudinary URL (idImage) into the id_image_path column
     await pDb.query(sql, [userId, idType, idNumber, lastName, firstName, address, phone || '', email || '', idImage]);
     await logSystemActivity('User', `Verification request submitted by ${firstName} ${lastName}`);
-
     res.json({ success: true, message: "Verification request submitted successfully!" });
-  } catch (error) {
-    res.status(500).json({ success: false, message: "Database error processing verification." });
-  }
+  } catch (error) { res.status(500).json({ success: false, message: "Database error processing verification." }); }
 });
 
 app.post('/contact-message', async (req, res) => {
     const { name, email, message } = req.body;
-    
-    if (!name || !email || !message) {
-        return res.status(400).json({ success: false, message: "All fields are required." });
-    }
-
+    if (!name || !email || !message) return res.status(400).json({ success: false, message: "All fields are required." });
     try {
         const response = await fetch("https://api.brevo.com/v3/smtp/email", {
             method: "POST",
-            headers: {
-                "Content-Type": "application/json",
-                "api-key": process.env.BREVO_API_KEY
-            },
+            headers: { "Content-Type": "application/json", "api-key": process.env.BREVO_API_KEY },
             body: JSON.stringify({
                 sender: { name: "Website Contact Form", email: process.env.EMAIL_USER },
                 to: [{ email: process.env.EMAIL_USER }],
                 replyTo: { email: email, name: name }, 
                 subject: `New Website Inquiry from ${name}`,
-                htmlContent: `
-                  <div style="font-family: sans-serif; padding: 20px; color: #333;">
-                      <h2 style="color: #db2777;">New Contact Form Message</h2>
-                      <p><strong>Name:</strong> ${name}</p>
-                      <p><strong>Email:</strong> ${email}</p>
-                      <p><strong>Message:</strong></p>
-                      <blockquote style="background: #f9f9f9; border-left: 5px solid #db2777; padding: 15px; margin-left: 0;">
-                        ${message}
-                      </blockquote>
-                  </div>
-                `
+                htmlContent: `<div style="padding: 20px;"><h2>New Contact Form Message</h2><p><strong>Name:</strong> ${name}</p><p><strong>Email:</strong> ${email}</p><p><strong>Message:</strong></p><blockquote>${message}</blockquote></div>`
             })
         });
-
-        if (!response.ok) {
-            const errData = await response.json();
-            console.error("Brevo API Error Details:", errData);
-            throw new Error("Failed to send message via Brevo.");
-        }
-
+        if (!response.ok) throw new Error("Failed to send message via Brevo.");
         res.json({ success: true, message: "Your message has been sent successfully!" });
-    } catch (error) {
-        console.error("CONTACT FORM ERROR:", error);
-        res.status(500).json({ success: false, message: "Failed to send message. Please try again later." });
-    }
+    } catch (error) { res.status(500).json({ success: false, message: "Failed to send message. Please try again later." }); }
 });
 
 app.get('/fetch_notifications', (req, res) => {
@@ -428,8 +375,7 @@ app.get('/fetch_booked_dates', (req, res) => {
   db.query("SELECT preferred_date, end_date FROM appointments WHERE status != 'Cancelled'", (err, results) => {
     if (err) return res.status(500).json({ success: false, message: "Database error" });
     
-    let allBookedDates = new Set(); // Use a Set to automatically handle duplicate dates
-    
+    let allBookedDates = new Set();
     results.forEach(row => {
         let curr = new Date(row.preferred_date);
         let end = row.end_date ? new Date(row.end_date) : new Date(row.preferred_date);
@@ -437,15 +383,11 @@ app.get('/fetch_booked_dates', (req, res) => {
         curr.setHours(0,0,0,0);
         end.setHours(0,0,0,0);
         
-        // Add a 3-day buffer BEFORE the event starts
         let bufferStart = new Date(curr);
         bufferStart.setDate(bufferStart.getDate() - 3);
-
-        // Add a 3-day buffer AFTER the event ends
         let bufferEnd = new Date(end);
         bufferEnd.setDate(bufferEnd.getDate() + 3);
         
-        // Loop from bufferStart to bufferEnd to block all of them
         let pointer = new Date(bufferStart);
         while (pointer <= bufferEnd) {
             const y = pointer.getFullYear();
@@ -455,8 +397,6 @@ app.get('/fetch_booked_dates', (req, res) => {
             pointer.setDate(pointer.getDate() + 1);
         }
     });
-
-    // Convert the Set back to an array before sending to the frontend
     res.json({ success: true, bookedDates: Array.from(allBookedDates) });
   });
 });
@@ -465,7 +405,7 @@ app.get('/fetch_user_appointments', (req, res) => {
   const userId = req.query.user_id; 
   if (!userId) return res.status(400).json({ success: false, message: "User ID is required." });
   const sql = `
-    SELECT a.id, a.event_type, a.package_type, a.preferred_date, a.end_date, a.guest_count, a.status, a.total_cost, a.selected_dishes, p.description as inclusions 
+    SELECT a.id, a.event_type, a.package_type, a.preferred_date, a.end_date, a.event_time, a.event_location, a.guest_count, a.status, a.total_cost, a.selected_dishes, p.description as inclusions 
     FROM appointments a LEFT JOIN packages p ON a.package_type = p.package_name
     WHERE a.user_id = ? ORDER BY a.created_at DESC
   `;
@@ -485,10 +425,12 @@ app.get('/fetch_user_payments', (req, res) => {
   });
 });
 
+// NEW BOOK EVENT FLOW (Date/Time/Location -> Dishes)
 app.post('/book_event', async (req, res) => {
-  const { userId, eventType, packageType, preferredDate, duration, guestCount, selectedDishes, notes, totalCost } = req.body;
-  if (!userId || !eventType || !packageType || !preferredDate || !guestCount || !selectedDishes) {
-    return res.status(400).json({ success: false, message: "All fields are required." });
+  const { userId, eventType, packageType, preferredDate, eventTime, eventLocation, duration, guestCount, selectedDishes, notes, totalCost } = req.body;
+  
+  if (!userId || !eventType || !packageType || !preferredDate || !eventTime || !eventLocation || !guestCount || !selectedDishes) {
+    return res.status(400).json({ success: false, message: "All fields (including Time and Location) are required." });
   }
 
   let endDate = preferredDate;
@@ -525,8 +467,8 @@ app.post('/book_event', async (req, res) => {
       }
     }
 
-    const sql = `INSERT INTO appointments (user_id, event_type, package_type, preferred_date, end_date, guest_count, selected_dishes, required_inventory, total_cost, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'Pending')`;
-    const [result] = await pDb.query(sql, [userId, eventType, packageType, preferredDate, endDate, guestCount, selectedDishes, requiredInventoryStr, finalCost]);
+    const sql = `INSERT INTO appointments (user_id, event_type, package_type, preferred_date, end_date, event_time, event_location, guest_count, selected_dishes, required_inventory, total_cost, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Pending')`;
+    const [result] = await pDb.query(sql, [userId, eventType, packageType, preferredDate, endDate, eventTime, eventLocation, guestCount, selectedDishes, requiredInventoryStr, finalCost]);
     
     createNotification(userId, `Your booking for ${eventType} starting on ${preferredDate} has been received and is pending review.`);
     res.json({ success: true, message: "Event booking successful. We will contact you shortly!", booking_id: result.insertId });
@@ -712,19 +654,16 @@ app.post('/admin_delete_inventory_logs', async (req, res) => {
 });
 
 // =====================================
-// ADMIN MENU ROUTES (NO MULTER / CLOUDINARY URLS)
+// ADMIN MENU ROUTES
 // =====================================
-
 app.get('/admin_fetch_menu', (req, res) => { 
     db.query("SELECT * FROM menu_items", (err, r) => { res.json({ success: true, items: r }); }); 
 });
 
 app.post('/admin_add_menu', (req, res) => {
     const { name, category, price, description, image_url } = req.body;
-    
     db.query("SELECT id FROM menu_items WHERE name = ?", [name], (err, results) => {
         if (results && results.length > 0) return res.status(400).json({ success: false, message: "A menu dish with this name already exists!" });
-        
         db.query("INSERT INTO menu_items (name, category, price, description, image_url) VALUES (?, ?, ?, ?, ?)", 
         [name, category, price, description, image_url], async (err) => {
             if (err) return res.status(500).json({ success: false, message: "Database error" });
@@ -736,7 +675,6 @@ app.post('/admin_add_menu', (req, res) => {
 
 app.post('/admin_update_menu', (req, res) => {
     const { id, name, category, price, description, image_url } = req.body;
-    
     db.query("UPDATE menu_items SET name=?, category=?, price=?, description=?, image_url=? WHERE id=?", 
     [name, category, price, description, image_url, id], async (err) => {
         if (err) return res.status(500).json({ success: false, message: "Database error" });
@@ -775,7 +713,6 @@ app.get('/admin_fetch_all_payments', (req, res) => { db.query(`SELECT p.*, a.eve
 app.get('/admin_fetch_payment_history', (req, res) => { db.query("SELECT * FROM payments WHERE appointment_id = ? ORDER BY transaction_date DESC", [req.query.appointmentId], (err, r) => { res.json({ success: true, history: r }); }); });
 
 app.post('/admin_process_payment', async (req, res) => {
-  // Extract receiptImage directly from the JSON body instead of using multer
   const { appointmentId, amount, paymentType, remarks, receiptImage } = req.body;
   if (!appointmentId || !amount) return res.status(400).json({ success: false, message: "Appointment ID and Amount are required." });
 
