@@ -50,7 +50,7 @@ db.query("SHOW COLUMNS FROM appointments LIKE 'event_location'", (err, results) 
     if (!err && results.length === 0) db.query("ALTER TABLE appointments ADD COLUMN event_location VARCHAR(255) NULL AFTER event_time");
 });
 db.query("SHOW COLUMNS FROM appointments LIKE 'service_type'", (err, results) => {
-    if (!err && results.length === 0) db.query("ALTER TABLE appointments ADD COLUMN service_type VARCHAR(100) NULL AFTER event_type");
+    if (!err && results.length === 0) db.query("ALTER TABLE appointments ADD COLUMN service_type VARCHAR(255) NULL AFTER event_type");
 });
 db.query("SHOW COLUMNS FROM payments LIKE 'receipt_url'", (err, results) => {
     if (!err && results.length === 0) db.query("ALTER TABLE payments ADD COLUMN receipt_url VARCHAR(255) NULL");
@@ -86,20 +86,14 @@ async function createNotification(userId, message) {
 // =====================================
 app.post('/register', async (req, res) => {
   const { name, email, password } = req.body;
-  if (!name || !email || !password) return res.status(400).json({ success: false, message: "Missing required fields" });
-
   db.query("SELECT id FROM users WHERE email = ?", [email], async (err, results) => {
-    if (err) return res.status(500).json({ success: false, message: "Database error" });
     if (results.length > 0) return res.status(400).json({ success: false, message: "Email already registered" });
-    
     const hashedPassword = await bcrypt.hash(password, 10);
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
-
     db.query("INSERT INTO users (username, email, password, is_verified, email_verified, email_verification_token) VALUES (?, ?, ?, 0, 0, ?)", 
     [name, email, hashedPassword, otp], async (err, result) => {
-      if (err) return res.status(500).json({ success: false, message: "Registration failed" });
       try {
-          const response = await fetch("https://api.brevo.com/v3/smtp/email", {
+          await fetch("https://api.brevo.com/v3/smtp/email", {
               method: "POST", headers: { "Content-Type": "application/json", "api-key": process.env.BREVO_API_KEY },
               body: JSON.stringify({
                   sender: { name: "Mommy Rosal Catering", email: process.env.EMAIL_USER }, to: [{ email: email }],
@@ -107,7 +101,6 @@ app.post('/register', async (req, res) => {
                   htmlContent: `<div style="text-align: center; padding: 20px;"><h2>Welcome to Mommy Rosal's!</h2><p>Your email verification code is:</p><h1 style="color: #db2777; letter-spacing: 5px;">${otp}</h1></div>`
               })
           });
-          if (!response.ok) throw new Error("Failed to send email");
           res.json({ success: true, message: "OTP sent to your email. Please verify." });
       } catch (mailError) {
           db.query("DELETE FROM users WHERE id = ?", [result.insertId]);
@@ -129,13 +122,10 @@ app.post('/verify-otp', (req, res) => {
 
 app.post('/login', (req, res) => {
   const { email, password } = req.body; 
-  if (!email || !password) return res.status(400).json({ success: false, message: "Missing credentials" });
-  
   db.query("SELECT * FROM users WHERE email = ? OR username = ? LIMIT 1", [email, email], async (err, results) => {
     if (results.length === 0) return res.status(400).json({ success: false, message: "No user found with that email or name" });
     const user = results[0];
     const isMatch = await bcrypt.compare(password, user.password);
-    
     if (isMatch) {
       if (user.email_verified === 0) {
           const otp = Math.floor(100000 + Math.random() * 900000).toString();
@@ -143,11 +133,7 @@ app.post('/login', (req, res) => {
               if (!updateErr) {
                   fetch("https://api.brevo.com/v3/smtp/email", {
                       method: "POST", headers: { "Content-Type": "application/json", "api-key": process.env.BREVO_API_KEY },
-                      body: JSON.stringify({
-                          sender: { name: "Mommy Rosal Catering", email: process.env.EMAIL_USER }, to: [{ email: user.email }], 
-                          subject: "Your Verification Code - Mommy Rosal Catering",
-                          htmlContent: `<div style="text-align: center; padding: 20px;"><h2>Welcome back to Mommy Rosal's!</h2><h1 style="color: #db2777;">${otp}</h1></div>`
-                      })
+                      body: JSON.stringify({ sender: { name: "Mommy Rosal Catering", email: process.env.EMAIL_USER }, to: [{ email: user.email }], subject: "Your Verification Code - Mommy Rosal Catering", htmlContent: `<div style="text-align: center; padding: 20px;"><h2>Welcome back to Mommy Rosal's!</h2><h1 style="color: #db2777;">${otp}</h1></div>`})
                   }).catch(e => console.error(e));
               }
           });
@@ -178,7 +164,6 @@ app.post('/google-login', (req, res) => {
 
 app.post('/adminlogin', (req, res) => {
   const { username, password } = req.body;
-  if (!username || !password) return res.status(400).json({ success: false, message: "Missing fields" });
   db.query("SELECT * FROM admins WHERE username = ?", [username], (err, results) => {
     if (results.length === 0) return res.status(400).json({ success: false, message: "Admin not found" });
     const admin = results[0];
@@ -189,21 +174,14 @@ app.post('/adminlogin', (req, res) => {
 
 app.post('/forgot-password', (req, res) => {
     const { email } = req.body;
-    if (!email) return res.status(400).json({ success: false, message: "Email is required" });
-
     db.query("SELECT id FROM users WHERE email = ?", [email], (err, results) => {
         if (results.length === 0) return res.status(400).json({ success: false, message: "Email not found" });
         const otp = Math.floor(100000 + Math.random() * 900000).toString();
-
         db.query("UPDATE users SET email_verification_token = ? WHERE email = ?", [otp, email], async (err) => {
             try {
                 await fetch("https://api.brevo.com/v3/smtp/email", {
                     method: "POST", headers: { "Content-Type": "application/json", "api-key": process.env.BREVO_API_KEY },
-                    body: JSON.stringify({
-                        sender: { name: "Mommy Rosal Catering", email: process.env.EMAIL_USER }, to: [{ email: email }],
-                        subject: "Password Reset Code",
-                        htmlContent: `<div style="text-align: center; padding: 20px;"><h2>Password Reset</h2><h1 style="color: #db2777;">${otp}</h1></div>`
-                    })
+                    body: JSON.stringify({ sender: { name: "Mommy Rosal Catering", email: process.env.EMAIL_USER }, to: [{ email: email }], subject: "Password Reset Code", htmlContent: `<div style="text-align: center; padding: 20px;"><h2>Password Reset</h2><h1 style="color: #db2777;">${otp}</h1></div>` })
                 });
                 res.json({ success: true, message: "A 6-digit code has been sent to your email." });
             } catch (error) { res.status(500).json({ success: false, message: "Failed to send reset email." }); }
@@ -228,8 +206,6 @@ app.post('/reset-password', async (req, res) => {
 app.post('/verify', async (req, res) => {
   try {
     const { userId, idType, idNumber, lastName, firstName, address, phone, email, idImage } = req.body;
-    if (!userId) return res.status(400).json({ success: false, message: "User ID is missing." });
-    
     const pDb = db.promise();
     const sql = `INSERT INTO verification_requests (user_id, id_type, id_number, last_name, first_name, address, phone, email, id_image_path, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'Pending') ON DUPLICATE KEY UPDATE id_type = VALUES(id_type), id_number = VALUES(id_number), last_name = VALUES(last_name), first_name = VALUES(first_name), address = VALUES(address), phone = VALUES(phone), email = VALUES(email), id_image_path = VALUES(id_image_path), status = 'Pending'`;
     await pDb.query(sql, [userId, idType, idNumber, lastName, firstName, address, phone || '', email || '', idImage]);
@@ -277,10 +253,8 @@ app.get('/fetch_booked_dates', (req, res) => {
         let curr = new Date(row.preferred_date);
         let end = row.end_date ? new Date(row.end_date) : new Date(row.preferred_date);
         curr.setHours(0,0,0,0); end.setHours(0,0,0,0);
-        
         let bufferStart = new Date(curr); bufferStart.setDate(bufferStart.getDate() - 3);
         let bufferEnd = new Date(end); bufferEnd.setDate(bufferEnd.getDate() + 3);
-        
         let pointer = new Date(bufferStart);
         while (pointer <= bufferEnd) {
             const y = pointer.getFullYear();
@@ -309,12 +283,12 @@ app.get('/fetch_user_payments', (req, res) => {
 });
 
 // =====================================
-// NEW BOOK EVENT FLOW (DYNAMIC INVENTORY)
+// PHASE 3 BOOK EVENT FLOW (DYNAMIC INVENTORY)
 // =====================================
 app.post('/book_event', async (req, res) => {
-  const { userId, eventType, serviceType, packageType, preferredDate, eventTime, eventLocation, duration, guestCount, selectedDishes, notes, totalCost } = req.body;
+  const { userId, eventType, serviceType, packageType, preferredDate, eventTime, eventLocation, duration, guestCount, selectedDishes } = req.body;
   
-  if (!userId || !eventType || !serviceType || !packageType || !preferredDate || !eventTime || !eventLocation || !guestCount || !selectedDishes) {
+  if (!userId || !eventType || !serviceType || !preferredDate || !eventTime || !eventLocation || !guestCount) {
     return res.status(400).json({ success: false, message: "All fields are required." });
   }
 
@@ -327,45 +301,41 @@ app.post('/book_event', async (req, res) => {
 
   let requiredInventory = [];
 
-  // 1. Food Service Items (EVERYONE gets plates, forks, spoons, glasses)
-  const foodServiceItems = { 'Plate': 1, 'Utensils - Spoon': 1, 'Utensils - Fork': 1, 'Glass': 1 };
-  for (const [item, itemsPerGuest] of Object.entries(foodServiceItems)) {
-    const quantity = itemsPerGuest * guestCount;
-    if (quantity > 0) requiredInventory.push(`${item}: ${quantity}`);
+  // ONLY allocate food items if 'Food/Catering' is checked
+  if (serviceType.includes('Food/Catering')) {
+      requiredInventory.push(`Plate: ${guestCount}`);
+      requiredInventory.push(`Utensils - Spoon: ${guestCount}`);
+      requiredInventory.push(`Utensils - Fork: ${guestCount}`);
+      requiredInventory.push(`Glass: ${guestCount}`);
   }
 
-  // 2. Decor & Setup Items (ONLY if they selected 'Food and Decoration')
-  if (serviceType.includes('Decoration')) {
-      const decorItemsPerGuest = { 'Chairs': 1, 'Table Napkin': 1 };
-      const decorItemsRatio = { 'Table (10 seater)': 10 };
-      
-      for (const [item, itemsPerGuest] of Object.entries(decorItemsPerGuest)) {
-        const quantity = itemsPerGuest * guestCount;
-        if (quantity > 0) requiredInventory.push(`${item}: ${quantity}`);
-      }
-      for (const [item, ratio] of Object.entries(decorItemsRatio)) {
-        const quantity = Math.ceil(guestCount / ratio);
-        if (quantity > 0) requiredInventory.push(`${item}: ${quantity}`);
-      }
+  // ONLY allocate tables/chairs if 'Tables & Chairs' is checked
+  if (serviceType.includes('Tables & Chairs')) {
+      requiredInventory.push(`Chairs: ${guestCount}`);
+      requiredInventory.push(`Table (10 seater): ${Math.ceil(guestCount / 10)}`);
+  }
+
+  // ONLY allocate styling & lights if checked
+  if (serviceType.includes('Event Styling')) {
+      requiredInventory.push(`Table Napkin: ${guestCount}`);
+  }
+  
+  if (serviceType.includes('Lights & Sound')) {
       requiredInventory.push('Lights (assorted): 1');
+      requiredInventory.push('Sound System: 1');
   }
 
   const requiredInventoryStr = requiredInventory.join('; ');
 
   try {
     const pDb = db.promise();
-    let finalCost = totalCost;
-
-    if (!finalCost || isNaN(finalCost)) {
-      const [pkgRows] = await pDb.query("SELECT price FROM packages WHERE package_name = ? LIMIT 1", [packageType]);
-      finalCost = pkgRows.length > 0 ? parseFloat(pkgRows[0].price) : 0.00;
-    }
-
-    const sql = `INSERT INTO appointments (user_id, event_type, service_type, package_type, preferred_date, end_date, event_time, event_location, guest_count, selected_dishes, required_inventory, total_cost, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Pending')`;
-    const [result] = await pDb.query(sql, [userId, eventType, serviceType, packageType, preferredDate, endDate, eventTime, eventLocation, guestCount, selectedDishes, requiredInventoryStr, finalCost]);
+    
+    // Insert with totalCost = 0 for negotiation
+    const sql = `INSERT INTO appointments (user_id, event_type, service_type, package_type, preferred_date, end_date, event_time, event_location, guest_count, selected_dishes, required_inventory, total_cost, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 'Pending')`;
+    const [result] = await pDb.query(sql, [userId, eventType, serviceType, packageType || 'Custom', preferredDate, endDate, eventTime, eventLocation, guestCount, selectedDishes || '', requiredInventoryStr]);
     
     createNotification(userId, `Your booking for ${eventType} starting on ${preferredDate} has been received and is pending review.`);
-    res.json({ success: true, message: "Event booking successful. We will contact you shortly!", booking_id: result.insertId });
+    res.json({ success: true, message: "Event booking successful.", booking_id: result.insertId });
   } catch (err) {
     res.status(500).json({ success: false, message: "Database error: " + err.message });
   }
@@ -395,7 +365,7 @@ app.get('/admin_fetch_bookings', (req, res) => {
 });
 
 app.post('/admin_update_booking_status', async (req, res) => {
-  const { bookingId, status } = req.body;
+  const { bookingId, status, agreedPrice } = req.body;
   try {
     const pDb = db.promise();
     const [rows] = await pDb.query(`SELECT a.user_id, a.package_type, a.required_inventory, a.status, a.event_type, a.preferred_date, a.total_cost, u.username FROM appointments a LEFT JOIN users u ON a.user_id = u.id WHERE a.id = ?`, [bookingId]);
@@ -415,12 +385,8 @@ app.post('/admin_update_booking_status', async (req, res) => {
         }
       }
 
-      let costToSet = booking.total_cost;
-      if (!costToSet || parseFloat(costToSet) === 0) {
-        const [pkg] = await pDb.query("SELECT price FROM packages WHERE package_name = ? LIMIT 1", [booking.package_type]);
-        costToSet = pkg.length > 0 ? parseFloat(pkg[0].price) : 30000.00;
-      }
-      await pDb.query("UPDATE appointments SET status = ?, total_cost = ? WHERE id = ?", [status, costToSet, bookingId]);
+      let finalPrice = agreedPrice !== undefined ? agreedPrice : booking.total_cost;
+      await pDb.query("UPDATE appointments SET status = ?, total_cost = ? WHERE id = ?", [status, finalPrice, bookingId]);
     } else {
       await pDb.query("UPDATE appointments SET status = ? WHERE id = ?", [status, bookingId]);
     }
