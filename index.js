@@ -357,9 +357,30 @@ app.get('/admin_fetch_dashboard_stats', async (req, res) => {
 });
 
 app.get('/admin_fetch_bookings', (req, res) => {
-  const sql = `SELECT a.*, u.username as customer_name, u.email as customer_email, COALESCE(SUM(p.amount_paid), 0) as amount_paid, (a.total_cost - COALESCE(SUM(p.amount_paid), 0)) as balance FROM appointments a LEFT JOIN users u ON a.user_id = u.id LEFT JOIN payments p ON a.id = p.appointment_id GROUP BY a.id, u.username, u.email ORDER BY a.created_at DESC`;
+  const sql = `
+    SELECT 
+        a.*, 
+        u.username as customer_name, 
+        u.email as customer_email, 
+        COALESCE(SUM(p.amount_paid), 0) as amount_paid, 
+        (a.total_cost - COALESCE(SUM(p.amount_paid), 0)) as balance,
+        pk.dish_limit
+    FROM appointments a 
+    LEFT JOIN users u ON a.user_id = u.id 
+    LEFT JOIN payments p ON a.id = p.appointment_id 
+    LEFT JOIN packages pk ON a.package_type = pk.package_name
+    GROUP BY a.id, u.username, u.email, pk.dish_limit 
+    ORDER BY a.created_at DESC
+  `;
   db.query(sql, (err, results) => {
-    const formattedBookings = results.map(row => ({ ...row, customer_name: row.customer_name || `Unknown User`, customer_email: row.customer_email || "N/A", total_cost: parseFloat(row.total_cost) || 0, amount_paid: parseFloat(row.amount_paid) || 0, balance: parseFloat(row.balance) || 0 }));
+    const formattedBookings = results.map(row => ({ 
+        ...row, 
+        customer_name: row.customer_name || `Unknown User`, 
+        customer_email: row.customer_email || "N/A", 
+        total_cost: parseFloat(row.total_cost) || 0, 
+        amount_paid: parseFloat(row.amount_paid) || 0, 
+        balance: parseFloat(row.balance) || 0 
+    }));
     res.json({ success: true, bookings: formattedBookings });
   });
 });
