@@ -397,6 +397,21 @@ app.post('/admin_update_booking_status', async (req, res) => {
   } catch (err) { res.status(500).json({ success: false, message: "Error updating status." }); }
 });
 
+app.post('/admin_update_booking_details', async (req, res) => {
+  const { id, event_type, event_time, event_location, guest_count, service_type, selected_dishes } = req.body;
+  try {
+    const pDb = db.promise();
+    await pDb.query(
+      "UPDATE appointments SET event_type=?, event_time=?, event_location=?, guest_count=?, service_type=?, selected_dishes=? WHERE id=?",
+      [event_type, event_time, event_location, guest_count, service_type, selected_dishes, id]
+    );
+    await logSystemActivity('Booking', `Admin modified booking details for ID #${id}`);
+    res.json({ success: true, message: "Booking details updated successfully!" });
+  } catch (err) { 
+    res.status(500).json({ success: false, message: "Failed to update booking details." }); 
+  }
+});
+
 app.post('/admin_reconcile_booking', async (req, res) => {
   const { bookingId, damagedItems = {} } = req.body; 
   try {
