@@ -420,14 +420,32 @@ app.post('/admin_update_booking_status', async (req, res) => {
 
 app.post('/admin_update_booking_details', async (req, res) => {
   const { id, event_type, event_time, event_location, guest_count, service_type, selected_dishes } = req.body;
+  
   try {
     const pDb = db.promise();
+
+    // 1. Fetch the user_id associated with this booking before updating
+    const [rows] = await pDb.query("SELECT user_id, event_type FROM appointments WHERE id = ?", [id]);
+    const userId = rows.length > 0 ? rows[0].user_id : null;
+
+    // 2. Update the booking details in the database
     await pDb.query(
       "UPDATE appointments SET event_type=?, event_time=?, event_location=?, guest_count=?, service_type=?, selected_dishes=? WHERE id=?",
       [event_type, event_time, event_location, guest_count, service_type, selected_dishes, id]
     );
+
+    // 3. Log the activity for the Admin
     await logSystemActivity('Booking', `Admin modified booking details for ID #${id}`);
-    res.json({ success: true, message: "Booking details updated successfully!" });
+
+    // 4. INITIATE CLOSED-LOOP COMMUNICATION: Notify the specific customer
+    if (userId) {
+        await createNotification(
+            userId, 
+            `ADMIN UPDATE: The details for your ${event_type} event (Time, Guest Count, or Menu) have been modified by the administrator. Please review your profile for the finalized details.`
+        );
+    }
+
+    res.json({ success: true, message: "Booking details updated and customer notified!" });
   } catch (err) { 
     res.status(500).json({ success: false, message: "Failed to update booking details." }); 
   }
