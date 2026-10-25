@@ -50,7 +50,12 @@ db.query("SHOW COLUMNS FROM appointments LIKE 'event_location'", (err, results) 
     if (!err && results.length === 0) db.query("ALTER TABLE appointments ADD COLUMN event_location VARCHAR(255) NULL AFTER event_time");
 });
 db.query("SHOW COLUMNS FROM appointments LIKE 'service_type'", (err, results) => {
-    if (!err && results.length === 0) db.query("ALTER TABLE appointments ADD COLUMN service_type VARCHAR(255) NULL AFTER event_type");
+    if (!err && results.length === 0) {
+        db.query("ALTER TABLE appointments ADD COLUMN service_type TEXT NULL AFTER event_type");
+    } else {
+        // If it exists but is VARCHAR(255), upgrade it to TEXT to prevent "Data too long" errors
+        db.query("ALTER TABLE appointments MODIFY COLUMN service_type TEXT NULL");
+    }
 });
 db.query("SHOW COLUMNS FROM payments LIKE 'receipt_url'", (err, results) => {
     if (!err && results.length === 0) db.query("ALTER TABLE payments ADD COLUMN receipt_url VARCHAR(255) NULL");
