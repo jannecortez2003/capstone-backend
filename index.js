@@ -58,6 +58,9 @@ db.query("SHOW COLUMNS FROM payments LIKE 'receipt_url'", (err, results) => {
 db.query("SHOW COLUMNS FROM admins LIKE 'role'", (err, results) => {
     if (!err && results.length === 0) db.query("ALTER TABLE admins ADD COLUMN role ENUM('admin', 'manager', 'staff') NOT NULL DEFAULT 'admin'");
 });
+db.query("SHOW COLUMNS FROM admins LIKE 'created_at'", (err, results) => {
+    if (!err && results.length === 0) db.query("ALTER TABLE admins ADD COLUMN created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP");
+});
 db.query("SHOW COLUMNS FROM users LIKE 'google_id'", (err, results) => {
     if (!err && results.length === 0) db.query("ALTER TABLE users ADD COLUMN google_id VARCHAR(255) NULL");
 });
@@ -283,7 +286,7 @@ app.get('/fetch_user_payments', (req, res) => {
 });
 
 // =====================================
-// PHASE 3 BOOK EVENT FLOW (DYNAMIC INVENTORY)
+// PHASE 3 BOOK EVENT FLOW
 // =====================================
 app.post('/book_event', async (req, res) => {
   const { userId, eventType, serviceType, packageType, preferredDate, eventTime, eventLocation, duration, guestCount, selectedDishes } = req.body;
@@ -395,9 +398,7 @@ app.post('/admin_update_booking_status', async (req, res) => {
     
     if (status === 'Confirmed' && booking.status !== 'Confirmed') {
         
-      // ==========================================
       // PROFESSIONAL RULE: ONLY 1 ACTIVE BOOKING
-      // ==========================================
       const [activeBookings] = await pDb.query("SELECT id FROM appointments WHERE status = 'Confirmed'");
       if (activeBookings.length > 0) {
           return res.status(400).json({ 
@@ -616,6 +617,7 @@ app.get('/admin_fetch_reports', async (req, res) => {
       res.status(500).json({ success: false, message: "Error generating reports: " + e.message }); 
   }
 });
+
 app.get('/fetch_packages', (req, res) => { db.query("SELECT * FROM packages", (err, results) => { res.json({ success: true, packages: results }); }); });
 app.post('/admin_add_package', (req, res) => { db.query("INSERT INTO packages (package_name, description, price, pax_capacity, dish_limit, physical_assets) VALUES (?, ?, ?, ?, ?, ?)", [req.body.package_name, req.body.description, req.body.price, req.body.pax_capacity, req.body.dish_limit, req.body.physical_assets], () => res.json({ success: true, message: "Package added successfully" })); });
 app.post('/admin_update_package', (req, res) => { db.query("UPDATE packages SET package_name=?, description=?, price=?, pax_capacity=?, dish_limit=?, physical_assets=? WHERE id=?", [req.body.package_name, req.body.description, req.body.price, req.body.pax_capacity, req.body.dish_limit, req.body.physical_assets, req.body.id], () => res.json({ success: true, message: "Package updated successfully" })); });
@@ -628,6 +630,65 @@ app.post('/admin_verify_user', (req, res) => {
     if (status === 'Verified') db.query("UPDATE users SET is_verified = 1 WHERE id = (SELECT user_id FROM verification_requests WHERE id = ?)", [requestId]);
     res.json({ success: true });
   });
+});
+
+// =====================================
+// ADMIN ROLE MANAGEMENT ROUTES
+// =====================================
+
+app.get('/admin_fetch_roles', (req, res) => {
+    db.query("SELECT id, username, role, created_at FROM admins ORDER BY created_at DESC", (err, results) => {
+        if (err) return res.status(500).json({ success: false, message: "Database error" });
+        res.json({ success: true, admins: results });
+    });
+});
+
+app.post('/admin_add_role', async (req, res) => {
+    const { username, password, role } = req.body;
+    db.query("SELECT id FROM admins WHERE username = ?", [username], (err, results) => {
+        if (results.length > 0) return res.status(400).json({ success: false, message: "Username already exists." });
+        
+        db.query("INSERT INTO admins (username, password, role) VALUES (?, ?, ?)", [username, password, role], (err) => {
+            if (err) return res.status(500).json({ success: false, message: "Database error" });
+            logSystemActivity('Admin', `Created new ${role} account: ${username}`);
+            res.json({ success: true, message: `${role} account created successfully!` });
+        });
+    });
+});
+
+app.post('/admin_update_role', (req, res) => {
+    const { id, username, password, role } = req.body;
+    
+    if (username.toLowerCase() === 'admin' && role !== 'admin') {
+        return res.status(400).json({ success: false, message: "Cannot demote the primary admin account." });
+    }
+
+    if (password) {
+        db.query("UPDATE admins SET username=?, password=?, role=? WHERE id=?", [username, password, role, id], (err) => {
+            if (err) return res.status(500).json({ success: false, message: "Database error" });
+            logSystemActivity('Admin', `Updated account: ${username}`);
+            res.json({ success: true, message: "Account updated successfully!" });
+        });
+    } else {
+        db.query("UPDATE admins SET username=?, role=? WHERE id=?", [username, role, id], (err) => {
+            if (err) return res.status(500).json({ success: false, message: "Database error" });
+            logSystemActivity('Admin', `Updated account: ${username}`);
+            res.json({ success: true, message: "Account updated successfully!" });
+        });
+    }
+});
+
+app.post('/admin_delete_role', (req, res) => {
+    const { id, username } = req.body;
+    if (username.toLowerCase() === 'admin') {
+        return res.status(400).json({ success: false, message: "Cannot delete the primary admin account." });
+    }
+    
+    db.query("DELETE FROM admins WHERE id = ?", [id], (err) => {
+        if (err) return res.status(500).json({ success: false, message: "Database error" });
+        logSystemActivity('Admin', `Deleted account: ${username}`);
+        res.json({ success: true, message: "Account deleted successfully!" });
+    });
 });
 
 app.listen(PORT, () => console.log(`Backend running on port ${PORT}`));
