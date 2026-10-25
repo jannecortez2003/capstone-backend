@@ -394,6 +394,19 @@ app.post('/admin_update_booking_status', async (req, res) => {
     const booking = rows[0];
     
     if (status === 'Confirmed' && booking.status !== 'Confirmed') {
+        
+      // ==========================================
+      // PROFESSIONAL RULE: ONLY 1 ACTIVE BOOKING
+      // ==========================================
+      const [activeBookings] = await pDb.query("SELECT id FROM appointments WHERE status = 'Confirmed'");
+      if (activeBookings.length > 0) {
+          return res.status(400).json({ 
+              success: false, 
+              message: "Approval Denied. There is already a 'Confirmed' event in progress. You must complete the current event before approving a new one to prevent double-booking." 
+          });
+      }
+
+      // If clear, proceed with inventory deduction
       if (booking.required_inventory) {
         const items = booking.required_inventory.split('; '); 
         for (let itemStr of items) {
@@ -415,7 +428,9 @@ app.post('/admin_update_booking_status', async (req, res) => {
     await createNotification(booking.user_id, `Your ${booking.event_type} event booking status is now: ${status}.`);
     await logSystemActivity('Booking', `Updated booking #${bookingId} to ${status}`);
     res.json({ success: true, message: `Booking #${bookingId} status successfully updated to ${status}.` });
-  } catch (err) { res.status(500).json({ success: false, message: "Error updating status." }); }
+  } catch (err) { 
+      res.status(500).json({ success: false, message: "Error updating status." }); 
+  }
 });
 
 app.post('/admin_update_booking_details', async (req, res) => {
