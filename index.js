@@ -558,16 +558,64 @@ app.get('/admin_fetch_activity_logs', (req, res) => {
 app.get('/admin_fetch_reports', async (req, res) => {
   try {
     const pDb = db.promise();
+    
+    // 1. Financial Data (Payments)
     const [[rev]] = await pDb.query("SELECT COALESCE(SUM(amount_paid), 0) as total_rev FROM payments");
-    const [[bookings]] = await pDb.query(`SELECT COUNT(*) as total_events, COALESCE(SUM(guest_count), 0) as total_guests_served, SUM(CASE WHEN status = 'Completed' THEN 1 ELSE 0 END) as completed_events, SUM(CASE WHEN status = 'Confirmed' THEN 1 ELSE 0 END) as upcoming_events, SUM(CASE WHEN status = 'Pending' THEN 1 ELSE 0 END) as pending_events FROM appointments`);
-    const [eventsByType] = await pDb.query(`SELECT event_type, COUNT(*) as count, COALESCE(SUM(guest_count), 0) as total_guests FROM appointments GROUP BY event_type ORDER BY count DESC`);
+    const [recentPayments] = await pDb.query(`
+        SELECT p.amount_paid, p.payment_type, p.transaction_date, u.username as client_name 
+        FROM payments p 
+        LEFT JOIN appointments a ON p.appointment_id = a.id 
+        LEFT JOIN users u ON a.user_id = u.id 
+        ORDER BY p.transaction_date DESC LIMIT 5
+    `);
+
+    // 2. Booking Data
+    const [[bookings]] = await pDb.query(`
+        SELECT 
+            COUNT(*) as total_events, 
+            COALESCE(SUM(guest_count), 0) as total_guests_served, 
+            SUM(CASE WHEN status = 'Completed' THEN 1 ELSE 0 END) as completed_events, 
+            SUM(CASE WHEN status = 'Confirmed' THEN 1 ELSE 0 END) as upcoming_events, 
+            SUM(CASE WHEN status = 'Pending' THEN 1 ELSE 0 END) as pending_events,
+            SUM(CASE WHEN status = 'Cancelled' THEN 1 ELSE 0 END) as cancelled_events 
+        FROM appointments
+    `);
+    const [eventsByType] = await pDb.query(`
+        SELECT event_type, COUNT(*) as count, COALESCE(SUM(guest_count), 0) as total_guests 
+        FROM appointments GROUP BY event_type ORDER BY count DESC
+    `);
+    const [recentCateringOrders] = await pDb.query(`
+        SELECT a.id, a.event_type, a.preferred_date, a.end_date, a.guest_count, a.status, a.total_cost, u.username as client_name 
+        FROM appointments a LEFT JOIN users u ON a.user_id = u.id 
+        ORDER BY a.created_at DESC LIMIT 5
+    `);
+
+    // 3. Inventory Data
     const [inventoryAlerts] = await pDb.query(`SELECT name, quantity, unit FROM inventory WHERE quantity <= 20 ORDER BY quantity ASC`);
-    const [recentCateringOrders] = await pDb.query(`SELECT a.id, a.event_type, a.preferred_date, a.end_date, a.guest_count, a.status, a.total_cost, u.username as client_name FROM appointments a LEFT JOIN users u ON a.user_id = u.id ORDER BY a.preferred_date DESC LIMIT 6`);
+    const [[inventoryStats]] = await pDb.query(`SELECT COUNT(*) as total_item_types, COALESCE(SUM(quantity), 0) as total_physical_stock FROM inventory`);
 
-    res.json({ success: true, summary: { revenue: rev.total_rev || 0, total_events: bookings.total_events || 0, total_guests_served: bookings.total_guests_served || 0, completed_events: bookings.completed_events || 0, upcoming_events: bookings.upcoming_events || 0, pending_events: bookings.pending_events || 0 }, eventsByType, inventoryAlerts, recentCateringOrders });
-  } catch (e) { res.status(500).json({ success: false, message: "Error generating reports: " + e.message }); }
+    res.json({ 
+        success: true, 
+        summary: { 
+            revenue: rev.total_rev || 0, 
+            total_events: bookings.total_events || 0, 
+            total_guests_served: bookings.total_guests_served || 0, 
+            completed_events: bookings.completed_events || 0, 
+            upcoming_events: bookings.upcoming_events || 0, 
+            pending_events: bookings.pending_events || 0,
+            cancelled_events: bookings.cancelled_events || 0,
+            total_inventory_types: inventoryStats.total_item_types || 0,
+            total_physical_stock: inventoryStats.total_physical_stock || 0
+        }, 
+        eventsByType, 
+        inventoryAlerts, 
+        recentCateringOrders,
+        recentPayments
+    });
+  } catch (e) { 
+      res.status(500).json({ success: false, message: "Error generating reports: " + e.message }); 
+  }
 });
-
 app.get('/fetch_packages', (req, res) => { db.query("SELECT * FROM packages", (err, results) => { res.json({ success: true, packages: results }); }); });
 app.post('/admin_add_package', (req, res) => { db.query("INSERT INTO packages (package_name, description, price, pax_capacity, dish_limit, physical_assets) VALUES (?, ?, ?, ?, ?, ?)", [req.body.package_name, req.body.description, req.body.price, req.body.pax_capacity, req.body.dish_limit, req.body.physical_assets], () => res.json({ success: true, message: "Package added successfully" })); });
 app.post('/admin_update_package', (req, res) => { db.query("UPDATE packages SET package_name=?, description=?, price=?, pax_capacity=?, dish_limit=?, physical_assets=? WHERE id=?", [req.body.package_name, req.body.description, req.body.price, req.body.pax_capacity, req.body.dish_limit, req.body.physical_assets, req.body.id], () => res.json({ success: true, message: "Package updated successfully" })); });
